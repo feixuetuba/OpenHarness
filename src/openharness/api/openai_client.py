@@ -265,6 +265,11 @@ class OpenAICompatibleClient:
     """
 
     def __init__(self, api_key: str, *, base_url: str | None = None, timeout: float | None = None) -> None:
+        if not api_key:
+            raise AuthenticationFailure(
+                "API key is required for OpenAI-compatible clients. "
+                "Please configure your API key via 'oh setup' or the web settings."
+            )
         kwargs: dict[str, Any] = {
             "api_key": api_key,
             "default_headers": {"Authorization": f"Bearer {api_key}"},

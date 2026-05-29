@@ -1,0 +1,2352 @@
+<!DOCTYPE html>
+<html lang="zh-CN" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>OpenHarness Config</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            'dark-bg': '#0a0e1a',
+            'dark-bg-secondary': '#0f1629',
+            'dark-card': '#141b2d',
+            'dark-card-hover': '#1a2340',
+            'dark-border': '#1e293b',
+            'dark-border-light': '#334155',
+            'accent-green': '#34d399',
+            'accent-green-dark': '#059669',
+            'accent-blue': '#60a5fa',
+            'accent-purple': '#a78bfa',
+            'accent-amber': '#fbbf24',
+            'text-primary': '#f1f5f9',
+            'text-secondary': '#94a3b8',
+            'text-muted': '#64748b',
+          },
+          fontFamily: {
+            'sans': ['Inter', 'system-ui', 'sans-serif'],
+            'mono': ['JetBrains Mono', 'monospace'],
+          },
+          boxShadow: {
+            'soft': '0 2px 8px rgba(0, 0, 0, 0.3)',
+            'glow': '0 0 20px rgba(52, 211, 153, 0.15)',
+            'glow-purple': '0 0 20px rgba(167, 139, 250, 0.15)',
+          },
+          animation: {
+            'fade-in': 'fadeIn 0.3s ease-out',
+            'slide-up': 'slideUp 0.3s ease-out',
+            'pulse-slow': 'pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite',
+          },
+          keyframes: {
+            fadeIn: {
+              '0%': { opacity: '0' },
+              '100%': { opacity: '1' },
+            },
+            slideUp: {
+              '0%': { opacity: '0', transform: 'translateY(10px)' },
+              '100%': { opacity: '1', transform: 'translateY(0)' },
+            },
+          },
+        }
+      }
+    }
+  </script>
+  <style>
+    * { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: #1e293b; border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: #334155; }
+    .chat-scroll::-webkit-scrollbar { width: 6px; }
+
+    /* Fix browser autofill overriding dark theme styles */
+    input:-webkit-autofill,
+    input:-webkit-autofill:hover,
+    input:-webkit-autofill:focus,
+    input:-webkit-autofill:active {
+      -webkit-box-shadow: 0 0 0 30px #0f1629 inset !important;
+      -webkit-text-fill-color: #f1f5f9 !important;
+      transition: background-color 5000s ease-in-out 0s;
+    }
+    input:-moz-autofill {
+      box-shadow: 0 0 0 30px #0f1629 inset !important;
+      -moz-text-fill-color: #f1f5f9 !important;
+    }
+
+    /* Force dark theme styles on all inputs */
+    input[type="text"],
+    input[type="password"],
+    input[type="number"],
+    input[type="email"],
+    input[type="url"],
+    input[type="search"],
+    textarea,
+    select {
+      background-color: #0f1629 !important;
+      color: #f1f5f9 !important;
+      border-color: #1e293b !important;
+    }
+    input[type="text"]::placeholder,
+    input[type="password"]::placeholder,
+    input[type="number"]::placeholder,
+    input[type="email"]::placeholder,
+    input[type="url"]::placeholder,
+    input[type="search"]::placeholder,
+    textarea::placeholder {
+      color: #64748b !important;
+    }
+
+    .sub-nav-btn {
+      @apply w-full text-left px-4 py-3 text-sm text-text-secondary hover:bg-dark-border/50 hover:text-text-primary transition-all duration-200 flex items-center gap-3 rounded-lg;
+      display: flex !important;
+      flex-direction: row !important;
+      width: 100% !important;
+      margin-bottom: 4px !important;
+    }
+    .sub-nav-btn:last-child {
+      margin-bottom: 0 !important;
+    }
+    .sub-nav-btn.active {
+      @apply bg-gradient-to-r from-accent-green/10 to-transparent text-accent-green border-l-2 border-accent-green font-medium;
+    }
+    .nav-icon-btn {
+      @apply w-10 h-10 flex items-center justify-center rounded-xl text-text-muted hover:bg-dark-border/50 hover:text-text-primary transition-all duration-200 cursor-pointer;
+    }
+    .nav-icon-btn.active {
+      @apply bg-accent-green/10 text-accent-green shadow-glow;
+    }
+    .form-card {
+      @apply bg-dark-card border border-dark-border rounded-xl p-6 shadow-soft transition-all duration-200 hover:border-dark-border-light;
+    }
+    .form-card .form-section {
+      @apply mb-5 pb-5 border-b border-dark-border/50 last:mb-0 last:pb-0 last:border-b-0;
+    }
+    .form-input {
+      @apply w-full px-3.5 py-2.5 bg-dark-bg-secondary border border-dark-border rounded-lg text-text-primary text-sm focus:outline-none focus:border-accent-green focus:ring-2 focus:ring-accent-green/20 transition-all duration-200 placeholder:text-text-muted;
+    }
+    .form-label {
+      @apply block text-xs font-medium text-text-secondary mb-2;
+    }
+    .form-item {
+      @apply flex flex-col gap-2 mb-4 last:mb-0;
+    }
+    .social-tab-btn {
+      @apply px-4 py-2.5 text-sm font-medium rounded-lg transition-all duration-200 cursor-pointer border border-dark-border bg-dark-bg-secondary text-text-secondary hover:text-text-primary hover:border-dark-border-light;
+    }
+    .social-tab-btn.active {
+      @apply bg-gradient-to-r from-accent-green/10 to-transparent text-accent-green border-accent-green/50 shadow-sm;
+    }
+    .btn-primary {
+      @apply px-4 py-2.5 bg-gradient-to-r from-accent-green to-accent-green-dark text-white text-sm font-medium rounded-lg hover:shadow-glow hover:scale-[1.02] active:scale-[0.98] transition-all duration-200 cursor-pointer;
+    }
+    .btn-secondary {
+      @apply px-4 py-2.5 bg-dark-border/50 text-text-secondary text-sm font-medium rounded-lg hover:bg-dark-border hover:text-text-primary transition-all duration-200 cursor-pointer border border-dark-border;
+    }
+    .btn-danger {
+      @apply px-4 py-2.5 bg-red-500/10 text-red-400 text-sm font-medium rounded-lg hover:bg-red-500/20 hover:text-red-300 transition-all duration-200 cursor-pointer border border-red-500/20;
+    }
+    .status-dot {
+      @apply w-2 h-2 rounded-full inline-block mr-2;
+    }
+    .status-online { @apply bg-accent-green shadow-[0_0_8px_rgba(52,211,153,0.6)]; }
+    .status-offline { @apply bg-red-500/60; }
+    .chat-message-user {
+      @apply max-w-[70%] bg-gradient-to-br from-accent-green to-accent-green-dark text-white px-4 py-2.5 rounded-2xl rounded-br-sm text-sm shadow-glow;
+    }
+    .chat-message-assistant {
+      @apply max-w-[70%] bg-dark-card border border-dark-border px-4 py-2.5 rounded-2xl rounded-bl-sm text-sm text-text-primary shadow-soft;
+    }
+    .chat-message-assistant p {
+      margin: 0.5em 0;
+    }
+    .chat-message-assistant p:first-child {
+      margin-top: 0;
+    }
+    .chat-message-assistant p:last-child {
+      margin-bottom: 0;
+    }
+    .chat-message-assistant code {
+      @apply bg-dark-bg-secondary px-1.5 py-0.5 rounded text-xs font-mono text-accent-green;
+    }
+    .chat-message-assistant pre {
+      @apply bg-dark-bg-secondary border border-dark-border rounded-lg p-3 my-2 overflow-x-auto;
+    }
+    .chat-message-assistant pre code {
+      @apply bg-transparent p-0 text-xs;
+    }
+    .chat-message-assistant ul, .chat-message-assistant ol {
+      @apply pl-5 my-2;
+    }
+    .chat-message-assistant li {
+      @apply my-1;
+    }
+    .chat-message-assistant blockquote {
+      @apply border-l-2 border-accent-green pl-3 my-2 text-text-secondary italic;
+    }
+    .chat-message-assistant table {
+      @apply border-collapse my-2 w-full;
+    }
+    .chat-message-assistant th, .chat-message-assistant td {
+      @apply border border-dark-border px-3 py-1.5 text-xs;
+    }
+    .chat-message-assistant th {
+      @apply bg-dark-bg-secondary font-semibold;
+    }
+    .chat-message-assistant a {
+      @apply text-accent-green underline hover:text-accent-green-dark;
+    }
+    .chat-message-assistant h1, .chat-message-assistant h2, .chat-message-assistant h3 {
+      @apply font-semibold my-2 mt-3 first:mt-0;
+    }
+    .chat-message-assistant h1 { @apply text-base; }
+    .chat-message-assistant h2 { @apply text-sm; }
+    .chat-message-assistant h3 { @apply text-sm; }
+    .chat-message-assistant hr {
+      @apply border-dark-border my-3;
+    }
+    .trace-log {
+      @apply font-mono text-xs text-text-muted py-0.5 border-l-2 border-dark-border pl-2;
+    }
+    .glass-effect {
+      @apply bg-dark-card/80 backdrop-blur-sm;
+    }
+    .gradient-text {
+      @apply bg-gradient-to-r from-accent-green via-accent-blue to-accent-purple bg-clip-text text-transparent;
+    }
+  </style>
+</head>
+<body class="h-screen flex flex-col bg-dark-bg text-text-primary font-sans">
+  <!-- TopBar -->
+  <header class="h-14 flex items-center justify-between px-5 bg-dark-card/90 backdrop-blur-sm border-b border-dark-border shrink-0">
+    <div class="flex items-center gap-4">
+      <div class="flex items-center justify-center w-8 h-8 rounded-lg bg-accent-green/10 shadow-glow">
+        <svg class="w-5 h-5 text-accent-green" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
+        </svg>
+      </div>
+      <span class="text-sm font-semibold text-text-primary tracking-tight">OpenHarness</span>
+      <span class="text-xs text-text-muted">|</span>
+      <span id="agentName" class="text-xs text-text-secondary font-medium">Default Agent</span>
+      <button onclick="switchPrimaryNav('chat'); switchSubView('agents')" class="flex items-center gap-1 text-xs text-accent-green hover:text-accent-green-dark ml-2 transition-colors" title="切换 Agent">
+        <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+        </svg>
+      </button>
+      <span class="flex items-center text-xs text-text-secondary ml-2 px-2 py-1 bg-dark-bg-secondary rounded-full">
+        <span id="statusDot" class="status-dot status-offline"></span>
+        <span id="statusText">离线</span>
+      </span>
+    </div>
+    <div class="flex items-center gap-2">
+      <button onclick="hotReload()" class="flex items-center gap-2 px-3 py-1.5 text-xs text-text-secondary hover:text-text-primary hover:bg-dark-border/50 rounded-lg transition-all duration-200">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+        </svg>
+        热重载
+      </button>
+    </div>
+  </header>
+
+  <!-- Skill Detail Modal -->
+  <div id="skillModal" class="hidden fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+    <div class="bg-dark-card border border-dark-border rounded-xl w-full max-w-3xl max-h-[80vh] flex flex-col shadow-soft">
+      <div class="flex items-center justify-between p-5 border-b border-dark-border">
+        <div>
+          <h3 id="skillModalTitle" class="text-base font-semibold text-text-primary">Skill 详情</h3>
+          <p id="skillModalSource" class="text-xs text-text-muted mt-1"></p>
+        </div>
+        <button onclick="closeSkillModal()" class="nav-icon-btn">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+        </button>
+      </div>
+      <div class="flex-1 overflow-y-auto p-5">
+        <p id="skillModalDesc" class="text-sm text-text-secondary mb-4"></p>
+        <div class="flex flex-col gap-2 mb-4">
+          <label class="form-label">技能内容</label>
+          <pre id="skillModalContent" class="bg-dark-bg-secondary border border-dark-border rounded-lg p-4 text-xs text-text-secondary overflow-x-auto font-mono whitespace-pre-wrap"></pre>
+        </div>
+      </div>
+      <div class="flex justify-end gap-2 p-4 border-t border-dark-border">
+        <button onclick="closeSkillModal()" class="btn-secondary">关闭</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Add Memory Modal -->
+  <div id="addMemoryModal" class="hidden fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+    <div class="bg-dark-card border border-dark-border rounded-xl w-full max-w-2xl max-h-[80vh] flex flex-col shadow-soft">
+      <div class="flex items-center justify-between p-5 border-b border-dark-border">
+        <div>
+          <h3 class="text-base font-semibold text-text-primary">添加记忆条目</h3>
+          <p class="text-xs text-text-muted mt-1">创建新的记忆文件</p>
+        </div>
+        <button onclick="closeAddMemoryModal()" class="nav-icon-btn">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+        </button>
+      </div>
+      <div class="flex-1 overflow-y-auto p-5 space-y-4">
+        <div class="form-item">
+          <label class="form-label">标题</label>
+          <input type="text" id="newMemoryTitle" class="form-input" placeholder="记忆条目标题">
+        </div>
+        <div class="form-item">
+          <label class="form-label">内容</label>
+          <textarea id="newMemoryContent" class="form-input" rows="10" placeholder="记忆内容..."></textarea>
+        </div>
+      </div>
+      <div class="flex justify-end gap-2 p-4 border-t border-dark-border">
+        <button onclick="closeAddMemoryModal()" class="btn-secondary">取消</button>
+        <button onclick="addMemoryEntry()" class="btn-primary">保存</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Install Plugin Modal -->
+  <div id="installPluginModal" class="hidden fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+    <div class="bg-dark-card border border-dark-border rounded-xl w-full max-w-2xl max-h-[80vh] flex flex-col shadow-soft">
+      <div class="flex items-center justify-between p-5 border-b border-dark-border">
+        <div>
+          <h3 class="text-base font-semibold text-text-primary">安装插件</h3>
+          <p class="text-xs text-text-muted mt-1">从本地路径安装插件</p>
+        </div>
+        <button onclick="closeInstallPluginModal()" class="nav-icon-btn">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+        </button>
+      </div>
+      <div class="flex-1 overflow-y-auto p-5 space-y-4">
+        <div class="form-item">
+          <label class="form-label">插件路径</label>
+          <input type="text" id="newPluginPath" class="form-input" placeholder="/path/to/plugin">
+        </div>
+      </div>
+      <div class="flex justify-end gap-2 p-4 border-t border-dark-border">
+        <button onclick="closeInstallPluginModal()" class="btn-secondary">取消</button>
+        <button onclick="installPlugin()" class="btn-primary">安装</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Add MCP Server Modal -->
+  <div id="addMcpModal" class="hidden fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+    <div class="bg-dark-card border border-dark-border rounded-xl w-full max-w-2xl max-h-[80vh] flex flex-col shadow-soft">
+      <div class="flex items-center justify-between p-5 border-b border-dark-border">
+        <div>
+          <h3 class="text-base font-semibold text-text-primary">添加 MCP 服务器</h3>
+          <p class="text-xs text-text-muted mt-1">配置新的 MCP 服务器连接</p>
+        </div>
+        <button onclick="closeAddMcpModal()" class="nav-icon-btn">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+        </button>
+      </div>
+      <div class="flex-1 overflow-y-auto p-5 space-y-4">
+        <div class="form-item">
+          <label class="form-label">服务器名称</label>
+          <input type="text" id="newMcpName" class="form-input" placeholder="例如: my-mcp-server">
+        </div>
+        <div class="form-item">
+          <label class="form-label">命令</label>
+          <input type="text" id="newMcpCommand" class="form-input" placeholder="例如: npx">
+        </div>
+        <div class="form-item">
+          <label class="form-label">参数 (JSON 数组, 可选)</label>
+          <input type="text" id="newMcpArgs" class="form-input" placeholder='例如: ["-y", "@modelcontextprotocol/server-filesystem"]'>
+        </div>
+      </div>
+      <div class="flex justify-end gap-2 p-4 border-t border-dark-border">
+        <button onclick="closeAddMcpModal()" class="btn-secondary">取消</button>
+        <button onclick="addMcpServer()" class="btn-primary">添加</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Main Content -->
+  <div class="flex flex-1 overflow-hidden">
+    <!-- Left Sidebar (Icons Only) -->
+    <nav class="w-14 bg-dark-card/80 backdrop-blur-sm border-r border-dark-border flex flex-col items-center py-4 gap-3 shrink-0">
+      <button id="navSettings" onclick="switchPrimaryNav('settings')" class="nav-icon-btn active" title="管理面">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/>
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+        </svg>
+      </button>
+      <button id="navChat" onclick="switchPrimaryNav('chat')" class="nav-icon-btn" title="运行面/聊天">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/>
+        </svg>
+      </button>
+    </nav>
+
+    <!-- Sub-Sidebar -->
+    <aside id="subSidebar" class="w-64 bg-dark-card/60 backdrop-blur-sm border-r border-dark-border flex flex-col shrink-0">
+      <!-- Settings Submenu -->
+      <div id="subMenuSettings" class="flex flex-col">
+        <div class="px-5 py-4 border-b border-dark-border">
+          <h2 class="text-xs font-semibold text-text-muted uppercase tracking-wider">管理面</h2>
+        </div>
+        <nav class="flex-1 overflow-y-auto py-3 px-2 flex flex-col" style="display: flex !important; flex-direction: column !important;">
+          <button onclick="switchSubView('providers')" class="sub-nav-btn active" data-subview="providers">
+            <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2m-2-4h.01M17 16h.01"/></svg>
+            <span class="truncate">基础设置</span>
+          </button>
+          <button onclick="switchSubView('agents')" class="sub-nav-btn" data-subview="agents">
+            <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
+            <span class="truncate">Agent 配置</span>
+          </button>
+          <button onclick="switchSubView('skills')" class="sub-nav-btn" data-subview="skills">
+            <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/></svg>
+            <span class="truncate">Skill 技能</span>
+          </button>
+          <button onclick="switchSubView('memory')" class="sub-nav-btn" data-subview="memory">
+            <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4"/></svg>
+            <span class="truncate">Memory 记忆</span>
+          </button>
+          <button onclick="switchSubView('social')" class="sub-nav-btn" data-subview="social">
+            <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"/></svg>
+            <span class="truncate">Social 社交</span>
+          </button>
+          <button onclick="switchSubView('plugins')" class="sub-nav-btn" data-subview="plugins">
+            <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 4a2 2 0 114 0v1a1 1 0 001 1h3a1 1 0 011 1v3a1 1 0 01-1 1h-1a2 2 0 100 4h1a1 1 0 011 1v3a1 1 0 01-1 1h-3a1 1 0 01-1-1v-1a2 2 0 10-4 0v1a1 1 0 01-1 1H7a1 1 0 01-1-1v-3a1 1 0 00-1-1H4a2 2 0 110-4h1a1 1 0 001-1V7a1 1 0 011-1h3a1 1 0 001-1V4z"/></svg>
+            <span class="truncate">Plugins 插件</span>
+          </button>
+          <button onclick="switchSubView('mcp')" class="sub-nav-btn" data-subview="mcp">
+            <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2m-2-4h.01M17 16h.01"/></svg>
+            <span class="truncate">MCP 服务器</span>
+          </button>
+          <button onclick="switchSubView('sessions')" class="sub-nav-btn" data-subview="sessions">
+            <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/></svg>
+            <span class="truncate">Sessions 会话</span>
+          </button>
+          <button onclick="switchSubView('tasks')" class="sub-nav-btn" data-subview="tasks">
+            <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"/></svg>
+            <span class="truncate">Tasks 任务</span>
+          </button>
+        </nav>
+      </div>
+      <!-- Chat Submenu (History List) -->
+      <div id="subMenuChat" class="hidden flex flex-col">
+        <div class="px-5 py-4 border-b border-dark-border">
+          <h2 class="text-xs font-semibold text-text-muted uppercase tracking-wider">历史会话</h2>
+        </div>
+        <div id="chatHistoryList" class="flex-1 overflow-y-auto py-2 px-1">
+          <div class="px-4 py-3 text-xs text-text-muted text-center">暂无历史会话</div>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Main Workspace -->
+    <main class="flex-1 h-full overflow-hidden flex flex-col">
+      <!-- Management Views -->
+      <div id="workspaceManagement" class="h-full overflow-y-auto p-6 space-y-6">
+        <!-- Providers View -->
+        <div id="viewProviders" class="space-y-6">
+          <!-- Profile List -->
+          <div class="form-card">
+            <div class="flex items-center gap-3 mb-4">
+              <div class="w-8 h-8 rounded-lg bg-accent-blue/10 flex items-center justify-center">
+                <svg class="w-4 h-4 text-accent-blue" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2m-2-4h.01M17 16h.01"/></svg>
+              </div>
+              <div>
+                <h3 class="text-base font-semibold text-text-primary">Provider Profiles</h3>
+                <p class="text-xs text-text-muted">管理你的 LLM Provider 配置</p>
+              </div>
+            </div>
+            <div id="profileList" class="space-y-3"></div>
+            <div class="flex flex-wrap gap-2 items-center pt-4 border-t border-dark-border">
+              <button onclick="showAddProfileForm()" class="btn-primary">+ 添加 Profile</button>
+            </div>
+          </div>
+          <!-- Add Profile Form (Hidden by default) -->
+          <div id="addProfileForm" class="form-card hidden">
+            <div class="flex items-center gap-3 mb-6">
+              <div class="w-8 h-8 rounded-lg bg-accent-purple/10 flex items-center justify-center">
+                <svg class="w-4 h-4 text-accent-purple" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"/></svg>
+              </div>
+              <div>
+                <h3 class="text-base font-semibold text-text-primary">添加自定义 Provider</h3>
+                <p class="text-xs text-text-muted">配置新的 LLM 服务连接</p>
+              </div>
+            </div>
+            <div class="form-section">
+              <div class="form-item">
+                <label class="form-label">Profile 名称</label>
+                <input type="text" id="newProfileName" class="form-input" placeholder="例如: my-custom-provider">
+              </div>
+            </div>
+            <div class="form-section">
+              <div class="form-item">
+                <label class="form-label">显示名称</label>
+                <input type="text" id="newProfileLabel" class="form-input" placeholder="例如: My Custom Provider">
+              </div>
+            </div>
+            <div class="form-section">
+              <div class="form-item">
+                <label class="form-label">Provider 类型</label>
+                <select id="newProfileProvider" class="form-input">
+                  <option value="openai">OpenAI</option>
+                  <option value="anthropic">Anthropic</option>
+                  <option value="openrouter">OpenRouter</option>
+                </select>
+              </div>
+            </div>
+            <div class="form-section">
+              <div class="form-item">
+                <label class="form-label">API 格式</label>
+                <select id="newProfileApiFormat" class="form-input">
+                  <option value="openai">OpenAI Compatible</option>
+                  <option value="anthropic">Anthropic</option>
+                </select>
+              </div>
+            </div>
+            <div class="form-section">
+              <div class="form-item">
+                <label class="form-label">默认模型</label>
+                <input type="text" id="newProfileModel" class="form-input" placeholder="例如: gpt-4">
+              </div>
+            </div>
+            <div class="form-section">
+              <div class="form-item">
+                <label class="form-label">Base URL (可选)</label>
+                <input type="text" id="newProfileBaseUrl" class="form-input" placeholder="例如: https://api.example.com/v1">
+              </div>
+            </div>
+            <div class="flex flex-wrap gap-2 items-center pt-4 border-t border-dark-border">
+              <button onclick="addProfile()" class="btn-primary">保存</button>
+              <button onclick="hideAddProfileForm()" class="btn-secondary">取消</button>
+            </div>
+          </div>
+          <!-- Active Profile Settings -->
+          <div class="form-card">
+            <div class="flex items-center gap-3 mb-6">
+              <div class="w-8 h-8 rounded-lg bg-accent-green/10 flex items-center justify-center">
+                <svg class="w-4 h-4 text-accent-green" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+              </div>
+              <div>
+                <h3 class="text-base font-semibold text-text-primary">当前 Profile 设置</h3>
+                <p class="text-xs text-text-muted">调整活跃配置参数</p>
+              </div>
+            </div>
+            <div class="form-section">
+              <div class="form-item">
+                <label class="form-label">最后使用模型</label>
+                <input type="text" id="profileLastModel" class="form-input" placeholder="模型名称">
+              </div>
+            </div>
+            <div class="form-section">
+              <div class="form-item">
+                <label class="form-label">Base URL</label>
+                <input type="text" id="profileBaseUrl" class="form-input" placeholder="API Base URL">
+              </div>
+            </div>
+            <div class="flex flex-wrap gap-2 items-center pt-4 border-t border-dark-border">
+              <button onclick="saveProfileSettings()" class="btn-primary">保存设置</button>
+            </div>
+          </div>
+          <!-- API Key -->
+          <div class="form-card">
+            <div class="flex items-center gap-3 mb-6">
+              <div class="w-8 h-8 rounded-lg bg-accent-amber/10 flex items-center justify-center">
+                <svg class="w-4 h-4 text-accent-amber" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z"/></svg>
+              </div>
+              <div>
+                <h3 class="text-base font-semibold text-text-primary">API Key</h3>
+                <p class="text-xs text-text-muted">安全存储的认证密钥</p>
+              </div>
+            </div>
+            <div class="form-section">
+              <div class="form-item">
+                <label class="form-label">API Key</label>
+                <input type="password" id="apiKeyInput" class="form-input" placeholder="sk-...">
+              </div>
+            </div>
+            <div class="flex flex-wrap gap-2 items-center pt-4 border-t border-dark-border">
+              <button onclick="saveApiKey()" class="btn-primary">保存 Key</button>
+              <button onclick="testConnection()" class="btn-secondary">测试连接</button>
+            </div>
+            <div id="testResult" class="text-sm hidden mt-4"></div>
+          </div>
+        </div>
+
+        <!-- Skills View -->
+        <div id="viewSkills" class="hidden space-y-6">
+          <div class="form-card">
+            <div class="flex items-center gap-3 mb-4">
+              <div class="w-8 h-8 rounded-lg bg-accent-purple/10 flex items-center justify-center">
+                <svg class="w-4 h-4 text-accent-purple" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/></svg>
+              </div>
+              <div>
+                <h3 class="text-base font-semibold text-text-primary">Skill 技能管理</h3>
+                <p class="text-xs text-text-muted">扩展 Agent 的能力边界</p>
+              </div>
+            </div>
+            <div class="flex flex-wrap gap-2 items-center mb-4">
+              <button onclick="reloadSkills()" class="btn-secondary text-xs px-3 py-1.5">
+                <svg class="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+                刷新
+              </button>
+              <input type="text" id="skillSearch" placeholder="搜索技能..." class="form-input text-xs px-3 py-1.5" style="max-width: 250px;" oninput="filterSkills()">
+            </div>
+            <div id="skillList" class="space-y-3">
+              <div class="text-sm text-text-muted">加载中...</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Agents View -->
+        <div id="viewAgents" class="hidden space-y-6">
+          <div class="form-card">
+            <div class="flex items-center gap-3 mb-4">
+              <div class="w-8 h-8 rounded-lg bg-accent-green/10 flex items-center justify-center">
+                <svg class="w-4 h-4 text-accent-green" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
+              </div>
+              <div>
+                <h3 class="text-base font-semibold text-text-primary">Agent 配置</h3>
+                <p class="text-xs text-text-muted">管理多个 Agent 及其人格（系统提示词）</p>
+              </div>
+            </div>
+            <div id="agentList" class="space-y-3">
+              <div class="text-sm text-text-muted">加载中...</div>
+            </div>
+            <div class="flex flex-wrap gap-2 items-center pt-4 border-t border-dark-border">
+              <button onclick="showAddAgentForm()" class="btn-primary">+ 添加 Agent</button>
+            </div>
+          </div>
+          <!-- Add/Edit Agent Form (Hidden by default) -->
+          <div id="addAgentForm" class="form-card hidden">
+            <div class="flex items-center gap-3 mb-6">
+              <div class="w-8 h-8 rounded-lg bg-accent-purple/10 flex items-center justify-center">
+                <svg class="w-4 h-4 text-accent-purple" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"/></svg>
+              </div>
+              <div>
+                <h3 id="agentFormTitle" class="text-base font-semibold text-text-primary">添加 Agent</h3>
+                <p class="text-xs text-text-muted">配置 Agent 的人格和行为</p>
+              </div>
+            </div>
+            <div class="form-section">
+              <div class="form-item">
+                <label class="form-label">Agent ID</label>
+                <input type="text" id="newAgentId" class="form-input" placeholder="例如: code-reviewer">
+              </div>
+            </div>
+            <div class="form-section">
+              <div class="form-item">
+                <label class="form-label">显示名称</label>
+                <input type="text" id="newAgentName" class="form-input" placeholder="例如: 代码审查专家">
+              </div>
+            </div>
+            <div class="form-section">
+              <div class="flex flex-col gap-2">
+                <label class="form-label">系统提示词（人格）</label>
+                <textarea id="newAgentSystemPrompt" class="form-input" rows="8" placeholder="定义 Agent 的人格和行为准则..."></textarea>
+              </div>
+            </div>
+            <div class="form-section">
+              <div class="form-item">
+                <label class="form-label">模型覆盖（可选）</label>
+                <input type="text" id="newAgentModel" class="form-input" placeholder="留空则使用默认模型">
+              </div>
+            </div>
+            <div class="form-section">
+              <div class="form-item">
+                <label class="form-label">最大轮次（可选）</label>
+                <input type="number" id="newAgentMaxTurns" class="form-input" placeholder="留空则使用默认值">
+              </div>
+            </div>
+            <div class="flex flex-wrap gap-2 items-center pt-4 border-t border-dark-border">
+              <button onclick="saveAgent()" class="btn-primary">保存</button>
+              <button onclick="hideAddAgentForm()" class="btn-secondary">取消</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Memory View -->
+        <div id="viewMemory" class="hidden space-y-6">
+          <div class="form-card">
+            <div class="flex items-center gap-3 mb-4">
+              <div class="w-8 h-8 rounded-lg bg-accent-blue/10 flex items-center justify-center">
+                <svg class="w-4 h-4 text-accent-blue" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4"/></svg>
+              </div>
+              <div>
+                <h3 class="text-base font-semibold text-text-primary">Memory 记忆设置</h3>
+                <p class="text-xs text-text-muted">管理 Agent 的上下文记忆</p>
+              </div>
+            </div>
+            <div class="form-section">
+              <div class="form-item">
+                <label class="form-label">启用记忆</label>
+                <select id="memoryEnabled" class="form-input">
+                  <option value="true">启用</option>
+                  <option value="false">禁用</option>
+                </select>
+              </div>
+            </div>
+            <div class="form-section">
+              <div class="form-item">
+                <label class="form-label">最大记忆文件数</label>
+                <input type="number" id="memoryMaxFiles" class="form-input" placeholder="10">
+              </div>
+            </div>
+            <div class="flex flex-wrap gap-2 items-center pt-4 border-t border-dark-border">
+              <button onclick="saveMemorySettings()" class="btn-primary">保存设置</button>
+            </div>
+          </div>
+
+          <div class="form-card">
+            <div class="flex items-center gap-3 mb-4">
+              <div class="w-8 h-8 rounded-lg bg-accent-purple/10 flex items-center justify-center">
+                <svg class="w-4 h-4 text-accent-purple" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/></svg>
+              </div>
+              <div>
+                <h3 class="text-base font-semibold text-text-primary">记忆条目</h3>
+                <p class="text-xs text-text-muted">管理记忆文件</p>
+              </div>
+            </div>
+            <div class="flex flex-wrap gap-2 items-center mb-4">
+              <button onclick="loadMemoryEntries()" class="btn-secondary text-xs px-3 py-1.5">
+                <svg class="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+                刷新
+              </button>
+              <button onclick="showAddMemoryForm()" class="btn-secondary text-xs px-3 py-1.5">+ 添加记忆</button>
+              <input type="text" id="memorySearch" placeholder="搜索记忆..." class="form-input text-xs px-3 py-1.5" style="max-width: 250px;" oninput="searchMemoryEntries()">
+            </div>
+            <div id="memoryEntriesList" class="space-y-3">
+              <div class="text-sm text-text-muted">加载中...</div>
+            </div>
+          </div>
+
+          <div class="form-card">
+            <div class="flex items-center gap-3 mb-4">
+              <div class="w-8 h-8 rounded-lg bg-accent-amber/10 flex items-center justify-center">
+                <svg class="w-4 h-4 text-accent-amber" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+              </div>
+              <div>
+                <h3 class="text-base font-semibold text-text-primary">MEMORY.md</h3>
+                <p class="text-xs text-text-muted">编辑记忆入口文件</p>
+              </div>
+            </div>
+            <div class="flex flex-wrap gap-2 items-center mb-4">
+              <button onclick="loadMemoryMd()" class="btn-secondary text-xs px-3 py-1.5">加载</button>
+            </div>
+            <div class="flex flex-col gap-2">
+              <textarea id="memoryMdContent" class="form-input" rows="12" placeholder="编辑 MEMORY.md 内容..."></textarea>
+            </div>
+            <div class="flex flex-wrap gap-2 items-center mt-4">
+              <button onclick="saveMemoryMd()" class="btn-primary">保存 MEMORY.md</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Social View -->
+        <div id="viewSocial" class="hidden space-y-6">
+          <div class="form-card">
+            <div class="flex items-center gap-3 mb-6">
+              <div class="w-8 h-8 rounded-lg bg-accent-green/10 flex items-center justify-center">
+                <svg class="w-4 h-4 text-accent-green" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"/></svg>
+              </div>
+              <div>
+                <h3 class="text-base font-semibold text-text-primary">社交平台设置</h3>
+                <p class="text-xs text-text-muted">配置社交媒体集成</p>
+              </div>
+            </div>
+            <div id="socialSettings">
+              <div class="text-sm text-text-muted">加载中...</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Plugins View -->
+        <div id="viewPlugins" class="hidden space-y-6">
+          <div class="form-card">
+            <div class="flex items-center gap-3 mb-4">
+              <div class="w-8 h-8 rounded-lg bg-accent-green/10 flex items-center justify-center">
+                <svg class="w-4 h-4 text-accent-green" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 4a2 2 0 114 0v1a1 1 0 001 1h3a1 1 0 011 1v3a1 1 0 01-1 1h-1a2 2 0 100 4h1a1 1 0 011 1v3a1 1 0 01-1 1h-3a1 1 0 01-1-1v-1a2 2 0 10-4 0v1a1 1 0 01-1 1H7a1 1 0 01-1-1v-3a1 1 0 00-1-1H4a2 2 0 110-4h1a1 1 0 001-1V7a1 1 0 011-1h3a1 1 0 001-1V4z"/></svg>
+              </div>
+              <div>
+                <h3 class="text-base font-semibold text-text-primary">Plugins 插件管理</h3>
+                <p class="text-xs text-text-muted">扩展系统功能</p>
+              </div>
+            </div>
+            <div class="flex flex-wrap gap-2 items-center mb-4">
+              <button onclick="loadPlugins()" class="btn-secondary text-xs px-3 py-1.5">
+                <svg class="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+                刷新
+              </button>
+              <button onclick="showInstallPluginForm()" class="btn-primary text-xs px-3 py-1.5">+ 安装插件</button>
+            </div>
+            <div id="pluginList" class="space-y-3">
+              <div class="text-sm text-text-muted">加载中...</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- MCP View -->
+        <div id="viewMcp" class="hidden space-y-6">
+          <div class="form-card">
+            <div class="flex items-center gap-3 mb-4">
+              <div class="w-8 h-8 rounded-lg bg-accent-blue/10 flex items-center justify-center">
+                <svg class="w-4 h-4 text-accent-blue" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2m-2-4h.01M17 16h.01"/></svg>
+              </div>
+              <div>
+                <h3 class="text-base font-semibold text-text-primary">MCP 服务器管理</h3>
+                <p class="text-xs text-text-muted">Model Context Protocol 服务器配置</p>
+              </div>
+            </div>
+            <div class="flex flex-wrap gap-2 items-center mb-4">
+              <button onclick="loadMcpServers()" class="btn-secondary text-xs px-3 py-1.5">
+                <svg class="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+                刷新
+              </button>
+              <button onclick="showAddMcpForm()" class="btn-primary text-xs px-3 py-1.5">+ 添加服务器</button>
+            </div>
+            <div id="mcpServerList" class="space-y-3">
+              <div class="text-sm text-text-muted">加载中...</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Sessions View -->
+        <div id="viewSessions" class="hidden space-y-6">
+          <div class="form-card">
+            <div class="flex items-center gap-3 mb-4">
+              <div class="w-8 h-8 rounded-lg bg-accent-purple/10 flex items-center justify-center">
+                <svg class="w-4 h-4 text-accent-purple" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/></svg>
+              </div>
+              <div>
+                <h3 class="text-base font-semibold text-text-primary">Sessions 会话管理</h3>
+                <p class="text-xs text-text-muted">查看历史会话记录</p>
+              </div>
+            </div>
+            <div class="flex flex-wrap gap-2 items-center mb-4">
+              <button onclick="loadSessions()" class="btn-secondary text-xs px-3 py-1.5">
+                <svg class="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+                刷新
+              </button>
+            </div>
+            <div id="sessionList" class="space-y-3">
+              <div class="text-sm text-text-muted">加载中...</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Tasks View -->
+        <div id="viewTasks" class="hidden space-y-6">
+          <div class="form-card">
+            <div class="flex items-center gap-3 mb-4">
+              <div class="w-8 h-8 rounded-lg bg-accent-amber/10 flex items-center justify-center">
+                <svg class="w-4 h-4 text-accent-amber" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"/></svg>
+              </div>
+              <div>
+                <h3 class="text-base font-semibold text-text-primary">Tasks 任务管理</h3>
+                <p class="text-xs text-text-muted">查看任务执行状态</p>
+              </div>
+            </div>
+            <div class="flex flex-wrap gap-2 items-center mb-4">
+              <button onclick="loadTasks()" class="btn-secondary text-xs px-3 py-1.5">
+                <svg class="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+                刷新
+              </button>
+            </div>
+            <div id="taskList" class="space-y-3">
+              <div class="text-sm text-text-muted">加载中...</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Chat Workspace (Dual Column) -->
+      <div id="workspaceChat" class="h-full hidden">
+        <div class="h-full flex">
+          <!-- Chat Area (70%) -->
+          <div class="flex-1 flex flex-col border-r border-dark-border">
+            <div id="chatMessages" class="flex-1 overflow-y-auto chat-scroll p-5 space-y-4">
+              <div class="text-center text-text-muted text-sm py-10">
+                <svg class="w-12 h-12 mx-auto mb-3 text-text-muted/30" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/>
+                </svg>
+                <p class="font-medium">开始新的对话</p>
+                <p class="text-xs mt-1 text-text-muted/60">输入消息与 Agent 交互</p>
+              </div>
+            </div>
+            <div class="p-4 border-t border-dark-border bg-dark-card/60 backdrop-blur-sm">
+              <div class="flex gap-3">
+                <input type="text" id="chatInput" placeholder="输入消息..." class="flex-1 px-4 py-3 bg-dark-bg-secondary border border-dark-border rounded-xl text-text-primary text-sm focus:outline-none focus:border-accent-green focus:ring-2 focus:ring-accent-green/20 transition-all duration-200 placeholder:text-text-muted" onkeypress="if(event.key==='Enter')sendMessage()">
+                <button onclick="sendMessage()" class="px-6 py-3 bg-gradient-to-r from-accent-green to-accent-green-dark text-white text-sm font-medium rounded-xl hover:shadow-glow hover:scale-[1.02] active:scale-[0.98] transition-all duration-200">
+                  <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"/></svg>
+                </button>
+              </div>
+            </div>
+          </div>
+          <!-- Trace Panel (30%) -->
+          <div class="w-[30%] min-w-[280px] flex flex-col bg-dark-bg/50">
+            <div class="px-4 py-3 border-b border-dark-border flex items-center gap-2">
+              <svg class="w-4 h-4 text-text-muted" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/></svg>
+              <h3 class="text-xs font-semibold text-text-muted uppercase tracking-wider">Harness Trace</h3>
+            </div>
+            <div id="traceLogs" class="flex-1 overflow-y-auto chat-scroll p-3 font-mono text-xs space-y-1">
+              <div class="text-text-muted/50">等待运行日志...</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <script>
+    // State
+    let currentNav = 'settings';
+    let currentSubView = 'providers';
+    let activeProfileName = '';
+    let currentAuthSource = '';
+    let editingAgentId = null;
+    let agents = [];
+    let activeAgentId = null;
+
+    // Navigation
+    function switchPrimaryNav(nav) {
+      currentNav = nav;
+      document.getElementById('navSettings').classList.toggle('active', nav === 'settings');
+      document.getElementById('navChat').classList.toggle('active', nav === 'chat');
+      document.getElementById('subMenuSettings').classList.toggle('hidden', nav !== 'settings');
+      document.getElementById('subMenuChat').classList.toggle('hidden', nav !== 'chat');
+      document.getElementById('workspaceManagement').classList.toggle('hidden', nav !== 'settings');
+      document.getElementById('workspaceChat').classList.toggle('hidden', nav !== 'chat');
+      if (nav === 'chat') {
+        loadChatHistory();
+      }
+    }
+
+    function switchSubView(view) {
+      currentSubView = view;
+      document.querySelectorAll('.sub-nav-btn').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.subview === view);
+      });
+      document.getElementById('viewProviders').classList.toggle('hidden', view !== 'providers');
+      document.getElementById('viewAgents').classList.toggle('hidden', view !== 'agents');
+      document.getElementById('viewSkills').classList.toggle('hidden', view !== 'skills');
+      document.getElementById('viewMemory').classList.toggle('hidden', view !== 'memory');
+      document.getElementById('viewSocial').classList.toggle('hidden', view !== 'social');
+      document.getElementById('viewPlugins').classList.toggle('hidden', view !== 'plugins');
+      document.getElementById('viewMcp').classList.toggle('hidden', view !== 'mcp');
+      document.getElementById('viewSessions').classList.toggle('hidden', view !== 'sessions');
+      document.getElementById('viewTasks').classList.toggle('hidden', view !== 'tasks');
+      if (view === 'agents') loadAgents();
+      if (view === 'skills') loadSkills();
+      if (view === 'social') loadSocialSettings();
+      if (view === 'memory') loadMemorySettings();
+      if (view === 'plugins') loadPlugins();
+      if (view === 'mcp') loadMcpServers();
+      if (view === 'sessions') loadSessions();
+      if (view === 'tasks') loadTasks();
+    }
+
+    // Data Loading
+    async function loadSettings() {
+      try {
+        const res = await fetch('/api/settings');
+        const data = await res.json();
+        activeProfileName = data.active_profile;
+        
+        // Load agents
+        agents = data.agents || [];
+        activeAgentId = data.active_agent_id;
+        const activeAgent = agents.find(a => a.id === activeAgentId);
+        document.getElementById('agentName').textContent = activeAgent?.name || data.active_profile || 'Default Agent';
+        
+        // Load current profile settings
+        if (data.profiles && data.profiles.length > 0) {
+          const activeProfile = data.profiles.find(p => p.active);
+          if (activeProfile) {
+            document.getElementById('profileLastModel').value = activeProfile.last_model || '';
+            document.getElementById('profileBaseUrl').value = activeProfile.base_url || '';
+          }
+        }
+        
+        document.getElementById('memoryEnabled').value = data.memory_enabled.toString();
+        document.getElementById('memoryMaxFiles').value = data.memory_max_files;
+        renderProfiles(data.profiles);
+        updateStatus(data);
+      } catch (e) {
+        console.error('Failed to load settings:', e);
+      }
+    }
+
+    function renderProfiles(profiles) {
+      const container = document.getElementById('profileList');
+      if (!profiles || profiles.length === 0) {
+        container.innerHTML = '<div class="text-sm text-text-muted">暂无 Profile</div>';
+        return;
+      }
+      container.innerHTML = profiles.map(p => `
+        <div class="flex flex-wrap gap-3 items-center p-3.5 bg-dark-bg-secondary border border-dark-border rounded-lg ${p.active ? 'border-accent-green/50 shadow-glow' : ''} animate-fade-in">
+          <div class="flex-1 min-w-[120px]">
+            <span class="text-sm font-medium ${p.active ? 'text-accent-green' : 'text-text-primary'}">${p.name}</span>
+            <span class="text-xs text-text-muted ml-2">${p.label || ''}</span>
+          </div>
+          <span class="text-xs px-2.5 py-1 bg-dark-border/50 rounded-md text-text-muted">${p.provider}</span>
+          ${p.active ? '<span class="text-xs text-accent-green font-medium flex items-center gap-1"><span class="w-1.5 h-1.5 rounded-full bg-accent-green"></span>当前</span>' : ''}
+          <div class="flex flex-wrap gap-2 items-center ml-auto">
+            ${!p.active ? `<button onclick="useProfile('${p.name}')" class="btn-secondary text-xs px-2.5 py-1.5">使用</button>` : ''}
+            <button onclick="editProfile('${p.name}', '${p.auth_source || p.name}')" class="btn-secondary text-xs px-2.5 py-1.5">编辑</button>
+            <button onclick="deleteProfile('${p.name}')" class="btn-danger text-xs px-2.5 py-1.5">删除</button>
+          </div>
+        </div>
+      `).join('');
+    }
+
+    function updateStatus(data) {
+      const isOnline = data.permission_mode !== undefined;
+      document.getElementById('statusDot').className = `status-dot ${isOnline ? 'status-online' : 'status-offline'}`;
+      document.getElementById('statusText').textContent = isOnline ? '在线' : '离线';
+      if (isOnline) {
+        document.getElementById('statusText').parentElement.classList.add('text-accent-green');
+        document.getElementById('statusText').parentElement.classList.remove('text-text-secondary');
+      }
+    }
+
+    // Profile Actions
+    async function useProfile(name) {
+      try {
+        const res = await fetch(`/api/profile/${name}/use`, { method: 'POST' });
+        if (!res.ok) {
+          const err = await res.json();
+          alert('切换失败: ' + (err.detail || `HTTP ${res.status}`));
+          return;
+        }
+        await loadSettings();
+      } catch (e) {
+        alert('切换失败: ' + e.message);
+      }
+    }
+
+    function showAddProfileForm() {
+      document.getElementById('addProfileForm').classList.remove('hidden');
+    }
+
+    function hideAddProfileForm() {
+      document.getElementById('addProfileForm').classList.add('hidden');
+    }
+
+    async function addProfile() {
+      const data = {
+        name: document.getElementById('newProfileName').value,
+        label: document.getElementById('newProfileLabel').value,
+        provider: document.getElementById('newProfileProvider').value,
+        api_format: document.getElementById('newProfileApiFormat').value,
+        default_model: document.getElementById('newProfileModel').value,
+        base_url: document.getElementById('newProfileBaseUrl').value,
+      };
+      try {
+        const res = await fetch('/api/profile/add', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(data)
+        });
+        if (res.ok) {
+          hideAddProfileForm();
+          await loadSettings();
+        } else {
+          const err = await res.json();
+          alert('添加失败: ' + err.detail);
+        }
+      } catch (e) {
+        alert('添加失败: ' + e.message);
+      }
+    }
+
+    async function deleteProfile(name) {
+      if (!confirm(`确定删除 Profile "${name}"?`)) return;
+      try {
+        await fetch(`/api/profile/${name}`, { method: 'DELETE' });
+        await loadSettings();
+      } catch (e) {
+        alert('删除失败: ' + e.message);
+      }
+    }
+
+    function editProfile(name, authSource) {
+      activeProfileName = name;
+      currentAuthSource = authSource || name;
+      document.getElementById('profileLastModel').value = '';
+      document.getElementById('profileBaseUrl').value = '';
+    }
+
+    async function saveProfileSettings() {
+      const data = {
+        last_model: document.getElementById('profileLastModel').value,
+        base_url: document.getElementById('profileBaseUrl').value,
+      };
+      try {
+        await fetch(`/api/profile/${activeProfileName}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(data)
+        });
+        await loadSettings();
+      } catch (e) {
+        alert('保存失败: ' + e.message);
+      }
+    }
+
+    async function saveApiKey() {
+      const key = document.getElementById('apiKeyInput').value;
+      if (!key || !currentAuthSource) {
+        alert('请先选择一个 Profile');
+        return;
+      }
+      try {
+        await fetch(`/api/auth/${currentAuthSource}/set-key`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ api_key: key })
+        });
+        alert('API Key 已保存');
+      } catch (e) {
+        alert('保存失败: ' + e.message);
+      }
+    }
+
+    async function testConnection() {
+      const baseUrl = document.getElementById('profileBaseUrl').value;
+      const apiKey = document.getElementById('apiKeyInput').value;
+      if (!baseUrl) {
+        alert('请输入 Base URL');
+        return;
+      }
+      const resultDiv = document.getElementById('testResult');
+      resultDiv.classList.remove('hidden');
+      resultDiv.textContent = '测试中...';
+      resultDiv.className = 'text-sm text-text-secondary';
+      try {
+        const res = await fetch('/api/test-connection', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            base_url: baseUrl,
+            api_format: 'openai',
+            api_key: apiKey || undefined
+          })
+        });
+        const data = await res.json();
+        if (data.success) {
+          if (data.models && data.models.length > 0) {
+            resultDiv.innerHTML = `
+              <div class="space-y-2">
+                <div class="text-accent-green">连接成功! 可用模型: ${data.models.length} 个</div>
+                <div class="flex flex-col gap-1">
+                  <label class="form-label">选择模型</label>
+                  <select id="modelSelect" class="form-input" style="background-color: #0f1629; color: #f1f5f9;">
+                    <option value="">-- 请选择模型 --</option>
+                    ${data.models.map(m => `<option value="${m}">${m}</option>`).join('')}
+                  </select>
+                </div>
+                <button onclick="selectModel()" class="btn-primary text-xs px-3 py-1.5">确认选择</button>
+              </div>
+            `;
+          } else {
+            resultDiv.textContent = '连接成功! 但未获取到模型列表';
+            resultDiv.className = 'text-sm text-accent-green';
+          }
+        } else {
+          resultDiv.textContent = `连接失败: ${data.message}`;
+          resultDiv.className = 'text-sm text-red-500';
+        }
+      } catch (e) {
+        resultDiv.textContent = '测试失败: ' + e.message;
+        resultDiv.className = 'text-sm text-red-500';
+      }
+    }
+
+    async function selectModel() {
+      const select = document.getElementById('modelSelect');
+      const model = select ? select.value : '';
+      if (!model) {
+        alert('请选择一个模型');
+        return;
+      }
+      document.getElementById('profileLastModel').value = model;
+      const resultDiv = document.getElementById('testResult');
+      resultDiv.innerHTML = `<div class="text-accent-green">已选择: ${model}</div>`;
+    }
+
+    // Agent Management
+    async function loadAgents() {
+      try {
+        const res = await fetch('/api/agents');
+        const data = await res.json();
+        agents = data.agents || [];
+        activeAgentId = data.active_agent_id;
+        renderAgents();
+      } catch (e) {
+        document.getElementById('agentList').innerHTML = '<div class="text-sm text-red-400">加载失败</div>';
+      }
+    }
+
+    function renderAgents() {
+      const container = document.getElementById('agentList');
+      if (!agents || agents.length === 0) {
+        container.innerHTML = '<div class="text-sm text-text-muted">暂无 Agent 配置</div>';
+        return;
+      }
+      container.innerHTML = agents.map(a => `
+        <div class="flex flex-wrap gap-3 items-center p-3.5 bg-dark-bg-secondary border border-dark-border rounded-lg ${a.id === activeAgentId ? 'border-accent-green/50 shadow-glow' : ''} animate-fade-in">
+          <div class="flex-1 min-w-[120px]">
+            <span class="text-sm font-medium ${a.id === activeAgentId ? 'text-accent-green' : 'text-text-primary'}">${a.name}</span>
+            <span class="text-xs text-text-muted ml-2">(${a.id})</span>
+          </div>
+          ${a.id === activeAgentId ? '<span class="text-xs text-accent-green font-medium flex items-center gap-1"><span class="w-1.5 h-1.5 rounded-full bg-accent-green"></span>当前</span>' : ''}
+          <div class="flex flex-wrap gap-2 items-center ml-auto">
+            ${a.id !== activeAgentId ? `<button onclick="activateAgent('${a.id}')" class="btn-secondary text-xs px-2.5 py-1.5">使用</button>` : ''}
+            <button onclick="editAgent('${a.id}')" class="btn-secondary text-xs px-2.5 py-1.5">编辑</button>
+            <button onclick="deleteAgent('${a.id}')" class="btn-danger text-xs px-2.5 py-1.5">删除</button>
+          </div>
+        </div>
+      `).join('');
+    }
+
+    function showAddAgentForm() {
+      editingAgentId = null;
+      document.getElementById('agentFormTitle').textContent = '添加 Agent';
+      document.getElementById('newAgentId').value = '';
+      document.getElementById('newAgentName').value = '';
+      document.getElementById('newAgentSystemPrompt').value = '';
+      document.getElementById('newAgentModel').value = '';
+      document.getElementById('newAgentMaxTurns').value = '';
+      document.getElementById('newAgentId').disabled = false;
+      document.getElementById('addAgentForm').classList.remove('hidden');
+    }
+
+    function hideAddAgentForm() {
+      document.getElementById('addAgentForm').classList.add('hidden');
+      editingAgentId = null;
+    }
+
+    function editAgent(id) {
+      const agent = agents.find(a => a.id === id);
+      if (!agent) return;
+      
+      editingAgentId = id;
+      document.getElementById('agentFormTitle').textContent = '编辑 Agent';
+      document.getElementById('newAgentId').value = agent.id;
+      document.getElementById('newAgentId').disabled = true;
+      document.getElementById('newAgentName').value = agent.name || '';
+      document.getElementById('newAgentSystemPrompt').value = agent.system_prompt || '';
+      document.getElementById('newAgentModel').value = agent.model || '';
+      document.getElementById('newAgentMaxTurns').value = agent.max_turns || '';
+      document.getElementById('addAgentForm').classList.remove('hidden');
+    }
+
+    async function saveAgent() {
+      const id = document.getElementById('newAgentId').value.trim();
+      const name = document.getElementById('newAgentName').value.trim();
+      const systemPrompt = document.getElementById('newAgentSystemPrompt').value;
+      const model = document.getElementById('newAgentModel').value.trim() || null;
+      const maxTurns = document.getElementById('newAgentMaxTurns').value ? parseInt(document.getElementById('newAgentMaxTurns').value) : null;
+
+      if (!id || !name) {
+        alert('Agent ID 和显示名称为必填项');
+        return;
+      }
+
+      const agentData = {
+        id,
+        name,
+        system_prompt: systemPrompt,
+        model,
+        max_turns: maxTurns,
+      };
+
+      try {
+        let res;
+        if (editingAgentId) {
+          res = await fetch(`/api/agents/${editingAgentId}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(agentData)
+          });
+        } else {
+          res = await fetch('/api/agents', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(agentData)
+          });
+        }
+
+        if (res.ok) {
+          hideAddAgentForm();
+          await loadAgents();
+        } else {
+          const err = await res.json();
+          alert('保存失败: ' + (err.detail || `HTTP ${res.status}`));
+        }
+      } catch (e) {
+        alert('保存失败: ' + e.message);
+      }
+    }
+
+    async function activateAgent(id) {
+      try {
+        const res = await fetch(`/api/agents/${id}/activate`, { method: 'POST' });
+        if (!res.ok) {
+          const err = await res.json();
+          alert('切换失败: ' + (err.detail || `HTTP ${res.status}`));
+          return;
+        }
+        await loadAgents();
+        document.getElementById('agentName').textContent = agents.find(a => a.id === id)?.name || id;
+      } catch (e) {
+        alert('切换失败: ' + e.message);
+      }
+    }
+
+    async function deleteAgent(id) {
+      if (!confirm(`确定删除 Agent "${id}"?`)) return;
+      try {
+        const res = await fetch(`/api/agents/${id}`, { method: 'DELETE' });
+        if (!res.ok) {
+          const err = await res.json();
+          alert('删除失败: ' + (err.detail || `HTTP ${res.status}`));
+          return;
+        }
+        await loadAgents();
+        const activeAgent = agents.find(a => a.id === activeAgentId);
+        document.getElementById('agentName').textContent = activeAgent?.name || 'Default Agent';
+      } catch (e) {
+        alert('删除失败: ' + e.message);
+      }
+    }
+
+    // Skills
+    let allSkills = [];
+
+    async function loadSkills() {
+      try {
+        const res = await fetch('/api/skills');
+        const data = await res.json();
+        allSkills = Array.isArray(data) ? data : (data.skills || []);
+        renderSkillsList(allSkills);
+      } catch (e) {
+        document.getElementById('skillList').innerHTML = '<div class="text-sm text-red-400">加载失败</div>';
+      }
+    }
+
+    function renderSkillsList(skills) {
+      const container = document.getElementById('skillList');
+      if (!skills || skills.length === 0) {
+        container.innerHTML = '<div class="text-sm text-text-muted">暂无可用技能</div>';
+        return;
+      }
+      container.innerHTML = skills.map(s => `
+        <div class="flex flex-wrap gap-3 items-center p-3.5 bg-dark-bg-secondary border border-dark-border rounded-lg animate-fade-in">
+          <div class="flex-1 min-w-[150px]">
+            <span class="text-sm font-medium text-text-primary">${s.name}</span>
+            <span class="text-xs text-text-muted ml-2">${s.source || ''}</span>
+          </div>
+          <div class="flex-1 min-w-[200px]">
+            <span class="text-xs text-text-secondary truncate block">${s.description || ''}</span>
+          </div>
+          <div class="flex flex-wrap gap-2 items-center ml-auto">
+            <button onclick="viewSkillDetails('${s.name}')" class="btn-secondary text-xs px-2.5 py-1.5">查看</button>
+          </div>
+        </div>
+      `).join('');
+    }
+
+    function filterSkills() {
+      const search = document.getElementById('skillSearch').value.toLowerCase();
+      if (!search) {
+        renderSkillsList(allSkills);
+        return;
+      }
+      const filtered = allSkills.filter(s => 
+        s.name.toLowerCase().includes(search) || 
+        (s.description && s.description.toLowerCase().includes(search)) ||
+        (s.source && s.source.toLowerCase().includes(search))
+      );
+      renderSkillsList(filtered);
+    }
+
+    async function viewSkillDetails(name) {
+      try {
+        const res = await fetch(`/api/skills/${encodeURIComponent(name)}`);
+        const data = await res.json();
+        document.getElementById('skillModalTitle').textContent = data.name;
+        document.getElementById('skillModalSource').textContent = `来源: ${data.source || '未知'} | 路径: ${data.path || '无'}`;
+        document.getElementById('skillModalDesc').textContent = data.description || '';
+        document.getElementById('skillModalContent').textContent = data.content || '(无内容)';
+        document.getElementById('skillModal').classList.remove('hidden');
+      } catch (e) {
+        alert('加载技能详情失败: ' + e.message);
+      }
+    }
+
+    function closeSkillModal() {
+      document.getElementById('skillModal').classList.add('hidden');
+    }
+
+    async function reloadSkills() {
+      try {
+        const res = await fetch('/api/skills/reload', { method: 'POST' });
+        const data = await res.json();
+        await loadSkills();
+        alert(`已重新加载 ${data.count || 0} 个技能`);
+      } catch (e) {
+        alert('重新加载失败: ' + e.message);
+      }
+    }
+
+    async function saveSkillSettings() {
+      const data = {
+        auto_load: document.getElementById('skillAutoLoad').value === 'true'
+      };
+      try {
+        await fetch('/api/skill-management', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(data)
+        });
+        alert('设置已保存');
+      } catch (e) {
+        alert('保存失败: ' + e.message);
+      }
+    }
+
+    // Memory
+    let memoryEntries = [];
+
+    async function loadMemorySettings() {
+      try {
+        const res = await fetch('/api/memory-settings');
+        const data = await res.json();
+        document.getElementById('memoryEnabled').value = data.enabled.toString();
+        document.getElementById('memoryMaxFiles').value = data.max_files;
+      } catch (e) {
+        console.error('Failed to load memory settings:', e);
+      }
+    }
+
+    async function saveMemorySettings() {
+      const data = {
+        enabled: document.getElementById('memoryEnabled').value === 'true',
+        max_files: parseInt(document.getElementById('memoryMaxFiles').value)
+      };
+      try {
+        await fetch('/api/memory-settings', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(data)
+        });
+        alert('记忆设置已保存');
+      } catch (e) {
+        alert('保存失败: ' + e.message);
+      }
+    }
+
+    async function loadMemoryEntries() {
+      try {
+        const res = await fetch('/api/memory/entries');
+        const data = await res.json();
+        memoryEntries = Array.isArray(data) ? data : (data.entries || []);
+        renderMemoryEntries(memoryEntries);
+      } catch (e) {
+        document.getElementById('memoryEntriesList').innerHTML = '<div class="text-sm text-red-400">加载失败</div>';
+      }
+    }
+
+    function renderMemoryEntries(entries) {
+      const container = document.getElementById('memoryEntriesList');
+      if (!entries || entries.length === 0) {
+        container.innerHTML = '<div class="text-sm text-text-muted">暂无记忆条目</div>';
+        return;
+      }
+      container.innerHTML = entries.map(e => `
+        <div class="flex flex-wrap gap-3 items-center p-3.5 bg-dark-bg-secondary border border-dark-border rounded-lg animate-fade-in">
+          <div class="flex-1 min-w-[150px]">
+            <span class="text-sm font-medium text-text-primary">${e.title || e.id}</span>
+            <span class="text-xs text-text-muted ml-2">${e.type || ''}</span>
+          </div>
+          <div class="flex-1 min-w-[200px]">
+            <span class="text-xs text-text-secondary truncate block">${e.description || ''}</span>
+          </div>
+          <div class="flex flex-wrap gap-2 items-center ml-auto">
+            <button onclick="deleteMemoryEntry('${e.id}')" class="btn-danger text-xs px-2.5 py-1.5">删除</button>
+          </div>
+        </div>
+      `).join('');
+    }
+
+    function searchMemoryEntries() {
+      const search = document.getElementById('memorySearch').value.toLowerCase();
+      if (!search) {
+        renderMemoryEntries(memoryEntries);
+        return;
+      }
+      const filtered = memoryEntries.filter(e => 
+        (e.title && e.title.toLowerCase().includes(search)) || 
+        (e.description && e.description.toLowerCase().includes(search)) ||
+        (e.id && e.id.toLowerCase().includes(search))
+      );
+      renderMemoryEntries(filtered);
+    }
+
+    function showAddMemoryForm() {
+      document.getElementById('newMemoryTitle').value = '';
+      document.getElementById('newMemoryContent').value = '';
+      document.getElementById('addMemoryModal').classList.remove('hidden');
+    }
+
+    function closeAddMemoryModal() {
+      document.getElementById('addMemoryModal').classList.add('hidden');
+    }
+
+    async function addMemoryEntry() {
+      const title = document.getElementById('newMemoryTitle').value.trim();
+      const content = document.getElementById('newMemoryContent').value.trim();
+      if (!title) {
+        alert('请输入标题');
+        return;
+      }
+      try {
+        const res = await fetch('/api/memory/entries', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ title, content })
+        });
+        if (!res.ok) {
+          const err = await res.json();
+          alert('添加失败: ' + (err.detail || `HTTP ${res.status}`));
+          return;
+        }
+        closeAddMemoryModal();
+        await loadMemoryEntries();
+        alert('记忆条目已添加');
+      } catch (e) {
+        alert('添加失败: ' + e.message);
+      }
+    }
+
+    async function deleteMemoryEntry(id) {
+      if (!confirm(`确定删除记忆条目 "${id}"?`)) return;
+      try {
+        const res = await fetch(`/api/memory/entries/${encodeURIComponent(id)}`, { method: 'DELETE' });
+        if (!res.ok) {
+          const err = await res.json();
+          alert('删除失败: ' + (err.detail || `HTTP ${res.status}`));
+          return;
+        }
+        await loadMemoryEntries();
+        alert('记忆条目已删除');
+      } catch (e) {
+        alert('删除失败: ' + e.message);
+      }
+    }
+
+    async function loadMemoryMd() {
+      try {
+        const res = await fetch('/api/memory/md');
+        const data = await res.json();
+        document.getElementById('memoryMdContent').value = data.content || '';
+      } catch (e) {
+        alert('加载失败: ' + e.message);
+      }
+    }
+
+    async function saveMemoryMd() {
+      const content = document.getElementById('memoryMdContent').value;
+      try {
+        const res = await fetch('/api/memory/md', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ content })
+        });
+        if (!res.ok) {
+          const err = await res.json();
+          alert('保存失败: ' + (err.detail || `HTTP ${res.status}`));
+          return;
+        }
+        alert('MEMORY.md 已保存');
+      } catch (e) {
+        alert('保存失败: ' + e.message);
+      }
+    }
+
+    // Social
+    async function loadSocialSettings() {
+      try {
+        const res = await fetch('/api/social-platforms');
+        const data = await res.json();
+        const container = document.getElementById('socialSettings');
+        container.innerHTML = `
+          <div class="flex gap-2 mb-6 border-b border-dark-border pb-4">
+            <button onclick="switchSocialTab('wechat')" id="socialTabWechat" class="social-tab-btn active">
+              <span class="flex items-center gap-2">
+                <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><path d="M8.691 2.188C3.891 2.188 0 5.476 0 9.53c0 2.212 1.17 4.203 3.002 5.55a.59.59 0 01.213.665l-.39 1.48c-.019.07-.028.141-.028.213 0 .163.13.294.29.294a.326.326 0 00.167-.054l1.903-1.114a.864.864 0 01.717-.098 10.16 10.16 0 002.537.323c.277 0 .543-.027.811-.05-.857-2.578.157-4.972 1.934-6.444 1.739-1.438 4.078-2.173 6.522-1.995-.567-3.733-4.078-6.616-8.587-6.616zm-2.6 4.408c.567 0 1.026.46 1.026 1.028 0 .566-.46 1.026-1.026 1.026-.567 0-1.026-.46-1.026-1.026 0-.567.459-1.028 1.026-1.028zm5.194 0c.567 0 1.026.46 1.026 1.028 0 .566-.46 1.026-1.026 1.026-.567 0-1.026-.46-1.026-1.026 0-.567.46-1.028 1.026-1.028zm4.902 3.26c-2.322-.089-4.478.566-6.078 1.887-1.598 1.328-2.537 3.234-2.537 5.236 0 4.054 3.891 7.342 8.691 7.342a10.16 10.16 0 002.537-.323.864.864 0 01.717.098l1.903 1.114a.326.326 0 00.167.054c.16 0 .29-.131.29-.294 0-.072-.01-.143-.028-.213l-.39-1.48a.59.59 0 01.213-.665c1.832-1.347 3.002-3.338 3.002-5.55 0-3.77-3.36-6.92-7.76-7.206h-.727zm-2.59 3.77c.567 0 1.026.46 1.026 1.026 0 .567-.46 1.026-1.026 1.026-.567 0-1.026-.46-1.026-1.026 0-.566.46-1.026 1.026-1.026zm5.194 0c.567 0 1.026.46 1.026 1.026 0 .567-.46 1.026-1.026 1.026-.567 0-1.026-.46-1.026-1.026 0-.566.46-1.026 1.026-1.026z"/></svg>
+                微信
+              </span>
+            </button>
+            <button onclick="switchSocialTab('qq')" id="socialTabQq" class="social-tab-btn">
+              <span class="flex items-center gap-2">
+                <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm4.64 13.27c-.33.59-.89 1.12-1.59 1.52-.12.07-.24.13-.37.19-.18.08-.36.15-.54.21-.36.12-.73.2-1.11.25-.19.02-.38.04-.57.04-.19 0-.38-.01-.57-.04-.38-.05-.75-.13-1.11-.25-.18-.06-.36-.13-.54-.21-.13-.06-.25-.12-.37-.19-.7-.4-1.26-.93-1.59-1.52-.06-.11-.11-.22-.16-.34-.05-.12-.09-.24-.13-.37-.08-.25-.13-.51-.16-.78-.02-.13-.03-.27-.03-.41 0-.14.01-.28.03-.41.03-.27.08-.53.16-.78.04-.13.08-.25.13-.37.05-.12.1-.23.16-.34.33-.59.89-1.12 1.59-1.52.12-.07.24-.13.37-.19.18-.08.36-.15.54-.21.36-.12.73-.2 1.11-.25.19-.02.38-.04.57-.04.19 0 .38.01.57.04.38.05.75.13 1.11.25.18.06.36.13.54.21.13.06.25.12.37.19.7.4 1.26.93 1.59 1.52.06.11.11.22.16.34.05.12.09.24.13.37.08.25.13.51.16.78.02.13.03.27.03.41 0 .14-.01.28-.03.41-.03.27-.08.53-.16.78-.04.13-.08.25-.13.37-.05.12-.1.23-.16.34z"/></svg>
+                QQ
+              </span>
+            </button>
+            <button onclick="switchSocialTab('feishu')" id="socialTabFeishu" class="social-tab-btn">
+              <span class="flex items-center gap-2">
+                <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
+                飞书
+              </span>
+            </button>
+          </div>
+
+          <div id="socialTabContentWechat" class="social-tab-content" style="display: block;">
+            <div class="form-section">
+              <div class="form-item">
+                <label class="form-label">启用微信集成</label>
+                <select id="socialWechatEnabled" class="form-input">
+                  <option value="true" ${data.wechat_enabled ? 'selected' : ''}>启用</option>
+                  <option value="false" ${!data.wechat_enabled ? 'selected' : ''}>禁用</option>
+                </select>
+              </div>
+            </div>
+            <div class="form-section">
+              <div class="form-item">
+                <label class="form-label">微信 API URL</label>
+                <input type="text" id="socialWechatApiUrl" class="form-input" placeholder="https://api.wechat.com" value="${data.wechat_api_url || ''}">
+              </div>
+            </div>
+            <div class="form-section">
+              <div class="form-item">
+                <label class="form-label">微信 Token</label>
+                <input type="password" id="socialWechatToken" class="form-input" placeholder="微信服务器验证Token" value="${data.wechat_token || ''}">
+              </div>
+            </div>
+            <div class="form-section">
+              <div class="form-item">
+                <label class="form-label">微信 AES Key</label>
+                <input type="password" id="socialWechatAesKey" class="form-input" placeholder="消息加密AES Key" value="${data.wechat_aes_key || ''}">
+              </div>
+            </div>
+          </div>
+
+          <div id="socialTabContentQq" class="social-tab-content" style="display: none;">
+            <div class="form-section">
+              <div class="form-item">
+                <label class="form-label">启用QQ集成</label>
+                <select id="socialQqEnabled" class="form-input">
+                  <option value="true" ${data.qq_enabled ? 'selected' : ''}>启用</option>
+                  <option value="false" ${!data.qq_enabled ? 'selected' : ''}>禁用</option>
+                </select>
+              </div>
+            </div>
+            <div class="form-section">
+              <div class="form-item">
+                <label class="form-label">QQ API URL</label>
+                <input type="text" id="socialQqApiUrl" class="form-input" placeholder="https://api.q.qq.com" value="${data.qq_api_url || ''}">
+              </div>
+            </div>
+            <div class="form-section">
+              <div class="form-item">
+                <label class="form-label">QQ App ID</label>
+                <input type="text" id="socialQqAppId" class="form-input" placeholder="QQ开放平台App ID" value="${data.qq_app_id || ''}">
+              </div>
+            </div>
+            <div class="form-section">
+              <div class="form-item">
+                <label class="form-label">QQ App Secret</label>
+                <input type="password" id="socialQqAppSecret" class="form-input" placeholder="QQ开放平台App Secret" value="${data.qq_app_secret || ''}">
+              </div>
+            </div>
+          </div>
+
+          <div id="socialTabContentFeishu" class="social-tab-content" style="display: none;">
+            <div class="form-section">
+              <div class="form-item">
+                <label class="form-label">启用飞书集成</label>
+                <select id="socialFeishuEnabled" class="form-input">
+                  <option value="true" ${data.feishu_enabled ? 'selected' : ''}>启用</option>
+                  <option value="false" ${!data.feishu_enabled ? 'selected' : ''}>禁用</option>
+                </select>
+              </div>
+            </div>
+            <div class="form-section">
+              <div class="form-item">
+                <label class="form-label">飞书 API URL</label>
+                <input type="text" id="socialFeishuApiUrl" class="form-input" placeholder="https://open.feishu.cn" value="${data.feishu_api_url || ''}">
+              </div>
+            </div>
+            <div class="form-section">
+              <div class="form-item">
+                <label class="form-label">飞书 App ID</label>
+                <input type="text" id="socialFeishuAppId" class="form-input" placeholder="飞书开放平台App ID" value="${data.feishu_app_id || ''}">
+              </div>
+            </div>
+            <div class="form-section">
+              <div class="form-item">
+                <label class="form-label">飞书 App Secret</label>
+                <input type="password" id="socialFeishuAppSecret" class="form-input" placeholder="飞书开放平台App Secret" value="${data.feishu_app_secret || ''}">
+              </div>
+            </div>
+          </div>
+
+          <div class="flex flex-wrap gap-2 items-center pt-4 border-t border-dark-border">
+            <button onclick="saveSocialSettings()" class="btn-primary">保存</button>
+          </div>
+        `;
+      } catch (e) {
+        document.getElementById('socialSettings').innerHTML = '<div class="text-sm text-red-500">加载失败</div>';
+      }
+    }
+
+    // Plugins
+    let allPlugins = [];
+
+    async function loadPlugins() {
+      try {
+        const res = await fetch('/api/plugins');
+        const data = await res.json();
+        allPlugins = Array.isArray(data) ? data : [];
+        renderPluginsList(allPlugins);
+      } catch (e) {
+        document.getElementById('pluginList').innerHTML = '<div class="text-sm text-red-400">加载失败</div>';
+      }
+    }
+
+    function renderPluginsList(plugins) {
+      const container = document.getElementById('pluginList');
+      if (!plugins || plugins.length === 0) {
+        container.innerHTML = '<div class="text-sm text-text-muted">暂无插件</div>';
+        return;
+      }
+      container.innerHTML = plugins.map(p => `
+        <div class="flex flex-wrap gap-3 items-center p-3.5 bg-dark-bg-secondary border border-dark-border rounded-lg animate-fade-in">
+          <div class="flex-1 min-w-[150px]">
+            <span class="text-sm font-medium text-text-primary">${p.name}</span>
+            <span class="text-xs text-text-muted ml-2">v${p.version || '0.0.0'}</span>
+          </div>
+          <div class="flex-1 min-w-[200px]">
+            <span class="text-xs text-text-secondary truncate block">${p.description || ''}</span>
+          </div>
+          <div class="flex flex-wrap gap-2 items-center ml-auto">
+            <span class="text-xs px-2 py-1 rounded ${p.enabled ? 'bg-accent-green/10 text-accent-green' : 'bg-text-muted/10 text-text-muted'}">${p.enabled ? '已启用' : '已禁用'}</span>
+            <button onclick="togglePlugin('${p.name}')" class="btn-secondary text-xs px-2.5 py-1.5">${p.enabled ? '禁用' : '启用'}</button>
+            <button onclick="uninstallPlugin('${p.name}')" class="btn-danger text-xs px-2.5 py-1.5">卸载</button>
+          </div>
+        </div>
+      `).join('');
+    }
+
+    function showInstallPluginForm() {
+      document.getElementById('newPluginPath').value = '';
+      document.getElementById('installPluginModal').classList.remove('hidden');
+    }
+
+    function closeInstallPluginModal() {
+      document.getElementById('installPluginModal').classList.add('hidden');
+    }
+
+    async function installPlugin() {
+      const path = document.getElementById('newPluginPath').value.trim();
+      if (!path) {
+        alert('请输入插件路径');
+        return;
+      }
+      try {
+        const res = await fetch('/api/plugins/install', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ path })
+        });
+        if (!res.ok) {
+          const err = await res.json();
+          alert('安装失败: ' + (err.detail || `HTTP ${res.status}`));
+          return;
+        }
+        closeInstallPluginModal();
+        await loadPlugins();
+        alert('插件已安装');
+      } catch (e) {
+        alert('安装失败: ' + e.message);
+      }
+    }
+
+    async function togglePlugin(name) {
+      try {
+        const res = await fetch(`/api/plugins/${encodeURIComponent(name)}/toggle`, { method: 'POST' });
+        if (!res.ok) {
+          const err = await res.json();
+          alert('操作失败: ' + (err.detail || `HTTP ${res.status}`));
+          return;
+        }
+        await loadPlugins();
+      } catch (e) {
+        alert('操作失败: ' + e.message);
+      }
+    }
+
+    async function uninstallPlugin(name) {
+      if (!confirm(`确定卸载插件 "${name}"?`)) return;
+      try {
+        const res = await fetch(`/api/plugins/${encodeURIComponent(name)}`, { method: 'DELETE' });
+        if (!res.ok) {
+          const err = await res.json();
+          alert('卸载失败: ' + (err.detail || `HTTP ${res.status}`));
+          return;
+        }
+        await loadPlugins();
+        alert('插件已卸载');
+      } catch (e) {
+        alert('卸载失败: ' + e.message);
+      }
+    }
+
+    // MCP Servers
+    let allMcpServers = [];
+
+    async function loadMcpServers() {
+      try {
+        const res = await fetch('/api/mcp/servers');
+        const data = await res.json();
+        allMcpServers = Array.isArray(data) ? data : [];
+        renderMcpServersList(allMcpServers);
+      } catch (e) {
+        document.getElementById('mcpServerList').innerHTML = '<div class="text-sm text-red-400">加载失败</div>';
+      }
+    }
+
+    function renderMcpServersList(servers) {
+      const container = document.getElementById('mcpServerList');
+      if (!servers || servers.length === 0) {
+        container.innerHTML = '<div class="text-sm text-text-muted">暂无 MCP 服务器</div>';
+        return;
+      }
+      container.innerHTML = servers.map(s => `
+        <div class="flex flex-wrap gap-3 items-center p-3.5 bg-dark-bg-secondary border border-dark-border rounded-lg animate-fade-in">
+          <div class="flex-1 min-w-[150px]">
+            <span class="text-sm font-medium text-text-primary">${s.name}</span>
+          </div>
+          <div class="flex-1 min-w-[200px]">
+            <span class="text-xs text-text-secondary truncate block">${s.command || ''} ${(s.args || []).join(' ')}</span>
+          </div>
+          <div class="flex flex-wrap gap-2 items-center ml-auto">
+            <span class="text-xs px-2 py-1 rounded ${s.enabled ? 'bg-accent-green/10 text-accent-green' : 'bg-text-muted/10 text-text-muted'}">${s.enabled ? '已启用' : '已禁用'}</span>
+            <button onclick="toggleMcpServer('${s.name}')" class="btn-secondary text-xs px-2.5 py-1.5">${s.enabled ? '禁用' : '启用'}</button>
+            <button onclick="deleteMcpServer('${s.name}')" class="btn-danger text-xs px-2.5 py-1.5">删除</button>
+          </div>
+        </div>
+      `).join('');
+    }
+
+    function showAddMcpForm() {
+      document.getElementById('newMcpName').value = '';
+      document.getElementById('newMcpCommand').value = '';
+      document.getElementById('newMcpArgs').value = '';
+      document.getElementById('addMcpModal').classList.remove('hidden');
+    }
+
+    function closeAddMcpModal() {
+      document.getElementById('addMcpModal').classList.add('hidden');
+    }
+
+    async function addMcpServer() {
+      const name = document.getElementById('newMcpName').value.trim();
+      const command = document.getElementById('newMcpCommand').value.trim();
+      const argsStr = document.getElementById('newMcpArgs').value.trim();
+      if (!name || !command) {
+        alert('请输入服务器名称和命令');
+        return;
+      }
+      let args = [];
+      if (argsStr) {
+        try {
+          args = JSON.parse(argsStr);
+        } catch (e) {
+          alert('参数格式错误，请输入有效的JSON数组');
+          return;
+        }
+      }
+      try {
+        const res = await fetch('/api/mcp/servers', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name, command, args })
+        });
+        if (!res.ok) {
+          const err = await res.json();
+          alert('添加失败: ' + (err.detail || `HTTP ${res.status}`));
+          return;
+        }
+        closeAddMcpModal();
+        await loadMcpServers();
+        alert('MCP 服务器已添加');
+      } catch (e) {
+        alert('添加失败: ' + e.message);
+      }
+    }
+
+    async function toggleMcpServer(name) {
+      try {
+        const res = await fetch(`/api/mcp/servers/${encodeURIComponent(name)}/toggle`, { method: 'POST' });
+        if (!res.ok) {
+          const err = await res.json();
+          alert('操作失败: ' + (err.detail || `HTTP ${res.status}`));
+          return;
+        }
+        await loadMcpServers();
+      } catch (e) {
+        alert('操作失败: ' + e.message);
+      }
+    }
+
+    async function deleteMcpServer(name) {
+      if (!confirm(`确定删除 MCP 服务器 "${name}"?`)) return;
+      try {
+        const res = await fetch(`/api/mcp/servers/${encodeURIComponent(name)}`, { method: 'DELETE' });
+        if (!res.ok) {
+          const err = await res.json();
+          alert('删除失败: ' + (err.detail || `HTTP ${res.status}`));
+          return;
+        }
+        await loadMcpServers();
+        alert('MCP 服务器已删除');
+      } catch (e) {
+        alert('删除失败: ' + e.message);
+      }
+    }
+
+    // Sessions
+    let allSessions = [];
+
+    async function loadSessions() {
+      try {
+        const res = await fetch('/api/sessions');
+        const data = await res.json();
+        allSessions = Array.isArray(data) ? data : [];
+        renderSessionsList(allSessions);
+      } catch (e) {
+        document.getElementById('sessionList').innerHTML = '<div class="text-sm text-red-400">加载失败</div>';
+      }
+    }
+
+    function renderSessionsList(sessions) {
+      const container = document.getElementById('sessionList');
+      if (!sessions || sessions.length === 0) {
+        container.innerHTML = '<div class="text-sm text-text-muted">暂无会话</div>';
+        return;
+      }
+      container.innerHTML = sessions.map(s => `
+        <div class="flex flex-wrap gap-3 items-center p-3.5 bg-dark-bg-secondary border border-dark-border rounded-lg animate-fade-in">
+          <div class="flex-1 min-w-[150px]">
+            <span class="text-sm font-medium text-text-primary">${s.id || s.session_id || 'Unknown'}</span>
+          </div>
+          <div class="flex-1 min-w-[200px]">
+            <span class="text-xs text-text-secondary truncate block">${s.created_at || ''}</span>
+          </div>
+          <div class="flex flex-wrap gap-2 items-center ml-auto">
+            <button onclick="deleteSession('${s.id || s.session_id}')" class="btn-danger text-xs px-2.5 py-1.5">删除</button>
+          </div>
+        </div>
+      `).join('');
+    }
+
+    async function deleteSession(id) {
+      if (!confirm(`确定删除会话 "${id}"?`)) return;
+      try {
+        const res = await fetch(`/api/sessions/${encodeURIComponent(id)}`, { method: 'DELETE' });
+        if (!res.ok) {
+          const err = await res.json();
+          alert('删除失败: ' + (err.detail || `HTTP ${res.status}`));
+          return;
+        }
+        await loadSessions();
+        alert('会话已删除');
+      } catch (e) {
+        alert('删除失败: ' + e.message);
+      }
+    }
+
+    // Tasks
+    let allTasks = [];
+
+    async function loadTasks() {
+      try {
+        const res = await fetch('/api/tasks');
+        const data = await res.json();
+        allTasks = Array.isArray(data) ? data : [];
+        renderTasksList(allTasks);
+      } catch (e) {
+        document.getElementById('taskList').innerHTML = '<div class="text-sm text-red-400">加载失败</div>';
+      }
+    }
+
+    function renderTasksList(tasks) {
+      const container = document.getElementById('taskList');
+      if (!tasks || tasks.length === 0) {
+        container.innerHTML = '<div class="text-sm text-text-muted">暂无任务</div>';
+        return;
+      }
+      container.innerHTML = tasks.map(t => {
+        const statusColor = t.status === 'completed' ? 'bg-accent-green/10 text-accent-green' : 
+                           t.status === 'running' ? 'bg-accent-blue/10 text-accent-blue' :
+                           t.status === 'failed' ? 'bg-red-500/10 text-red-400' : 'bg-text-muted/10 text-text-muted';
+        return `
+        <div class="flex flex-wrap gap-3 items-center p-3.5 bg-dark-bg-secondary border border-dark-border rounded-lg animate-fade-in">
+          <div class="flex-1 min-w-[150px]">
+            <span class="text-sm font-medium text-text-primary">${t.id}</span>
+            <span class="text-xs text-text-muted ml-2">${t.type || ''}</span>
+          </div>
+          <div class="flex-1 min-w-[200px]">
+            <span class="text-xs text-text-secondary truncate block">${t.description || t.command || ''}</span>
+          </div>
+          <div class="flex flex-wrap gap-2 items-center ml-auto">
+            <span class="text-xs px-2 py-1 rounded ${statusColor}">${t.status || 'unknown'}</span>
+          </div>
+        </div>
+      `}).join('');
+    }
+
+    // Social
+    async function loadSocialSettings() {
+      try {
+        const res = await fetch('/api/social-platforms');
+        const data = await res.json();
+        const container = document.getElementById('socialSettings');
+        container.innerHTML = `
+          <div class="flex gap-2 mb-6 border-b border-dark-border pb-4">
+            <button onclick="switchSocialTab('wechat')" id="socialTabWechat" class="social-tab-btn active">
+              <span class="flex items-center gap-2">
+                <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><path d="M8.691 2.188C3.891 2.188 0 5.476 0 9.53c0 2.212 1.17 4.203 3.002 5.55a.59.59 0 01.213.665l-.39 1.48c-.019.07-.028.141-.028.213 0 .163.13.294.29.294a.326.326 0 00.167-.054l1.903-1.114a.864.864 0 01.717-.098 10.16 10.16 0 002.537.323c.277 0 .543-.027.811-.05-.857-2.578.157-4.972 1.934-6.444 1.739-1.438 4.078-2.173 6.522-1.995-.567-3.733-4.078-6.616-8.587-6.616zm-2.6 4.408c.567 0 1.026.46 1.026 1.028 0 .566-.46 1.026-1.026 1.026-.567 0-1.026-.46-1.026-1.026 0-.567.459-1.028 1.026-1.028zm5.194 0c.567 0 1.026.46 1.026 1.028 0 .566-.46 1.026-1.026 1.026-.567 0-1.026-.46-1.026-1.026 0-.567.46-1.028 1.026-1.028zm4.902 3.26c-2.322-.089-4.478.566-6.078 1.887-1.598 1.328-2.537 3.234-2.537 5.236 0 4.054 3.891 7.342 8.691 7.342a10.16 10.16 0 002.537-.323.864.864 0 01.717.098l1.903 1.114a.326.326 0 00.167.054c.16 0 .29-.131.29-.294 0-.072-.01-.143-.028-.213l-.39-1.48a.59.59 0 01.213-.665c1.832-1.347 3.002-3.338 3.002-5.55 0-3.77-3.36-6.92-7.76-7.206h-.727zm-2.59 3.77c.567 0 1.026.46 1.026 1.026 0 .567-.46 1.026-1.026 1.026-.567 0-1.026-.46-1.026-1.026 0-.566.46-1.026 1.026-1.026zm5.194 0c.567 0 1.026.46 1.026 1.026 0 .567-.46 1.026-1.026 1.026-.567 0-1.026-.46-1.026-1.026 0-.566.46-1.026 1.026-1.026z"/></svg>
+                微信
+              </span>
+            </button>
+            <button onclick="switchSocialTab('qq')" id="socialTabQq" class="social-tab-btn">
+              <span class="flex items-center gap-2">
+                <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm4.64 13.27c-.33.59-.89 1.12-1.59 1.52-.12.07-.24.13-.37.19-.18.08-.36.15-.54.21-.36.12-.73.2-1.11.25-.19.02-.38.04-.57.04-.19 0-.38-.01-.57-.04-.38-.05-.75-.13-1.11-.25-.18-.06-.36-.13-.54-.21-.13-.06-.25-.12-.37-.19-.7-.4-1.26-.93-1.59-1.52-.06-.11-.11-.22-.16-.34-.05-.12-.09-.24-.13-.37-.08-.25-.13-.51-.16-.78-.02-.13-.03-.27-.03-.41 0-.14.01-.28.03-.41.03-.27.08-.53.16-.78.04-.13.08-.25.13-.37.05-.12.1-.23.16-.34.33-.59.89-1.12 1.59-1.52.12-.07.24-.13.37-.19.18-.08.36-.15.54-.21.36-.12.73-.2 1.11-.25.19-.02.38-.04.57-.04.19 0 .38.01.57.04.38.05.75.13 1.11.25.18.06.36.13.54.21.13.06.25.12.37.19.7.4 1.26.93 1.59 1.52.06.11.11.22.16.34.05.12.09.24.13.37.08.25.13.51.16.78.02.13.03.27.03.41 0 .14-.01.28-.03.41-.03.27-.08.53-.16.78-.04.13-.08.25-.13.37-.05.12-.1.23-.16.34z"/></svg>
+                QQ
+              </span>
+            </button>
+            <button onclick="switchSocialTab('feishu')" id="socialTabFeishu" class="social-tab-btn">
+              <span class="flex items-center gap-2">
+                <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
+                飞书
+              </span>
+            </button>
+          </div>
+
+          <div id="socialTabContentWechat" class="social-tab-content" style="display: block;">
+            <div class="form-section">
+              <div class="form-item">
+                <label class="form-label">启用微信集成</label>
+                <select id="socialWechatEnabled" class="form-input">
+                  <option value="true" ${data.wechat_enabled ? 'selected' : ''}>启用</option>
+                  <option value="false" ${!data.wechat_enabled ? 'selected' : ''}>禁用</option>
+                </select>
+              </div>
+            </div>
+            <div class="form-section">
+              <div class="form-item">
+                <label class="form-label">微信 API URL</label>
+                <input type="text" id="socialWechatApiUrl" class="form-input" placeholder="https://api.wechat.com" value="${data.wechat_api_url || ''}">
+              </div>
+            </div>
+            <div class="form-section">
+              <div class="form-item">
+                <label class="form-label">微信 Token</label>
+                <input type="password" id="socialWechatToken" class="form-input" placeholder="微信服务器验证Token" value="${data.wechat_token || ''}">
+              </div>
+            </div>
+            <div class="form-section">
+              <div class="form-item">
+                <label class="form-label">微信 AES Key</label>
+                <input type="password" id="socialWechatAesKey" class="form-input" placeholder="消息加密AES Key" value="${data.wechat_aes_key || ''}">
+              </div>
+            </div>
+          </div>
+
+          <div id="socialTabContentQq" class="social-tab-content" style="display: none;">
+            <div class="form-section">
+              <div class="form-item">
+                <label class="form-label">启用QQ集成</label>
+                <select id="socialQqEnabled" class="form-input">
+                  <option value="true" ${data.qq_enabled ? 'selected' : ''}>启用</option>
+                  <option value="false" ${!data.qq_enabled ? 'selected' : ''}>禁用</option>
+                </select>
+              </div>
+            </div>
+            <div class="form-section">
+              <div class="form-item">
+                <label class="form-label">QQ API URL</label>
+                <input type="text" id="socialQqApiUrl" class="form-input" placeholder="https://api.q.qq.com" value="${data.qq_api_url || ''}">
+              </div>
+            </div>
+            <div class="form-section">
+              <div class="form-item">
+                <label class="form-label">QQ App ID</label>
+                <input type="text" id="socialQqAppId" class="form-input" placeholder="QQ开放平台App ID" value="${data.qq_app_id || ''}">
+              </div>
+            </div>
+            <div class="form-section">
+              <div class="form-item">
+                <label class="form-label">QQ App Secret</label>
+                <input type="password" id="socialQqAppSecret" class="form-input" placeholder="QQ开放平台App Secret" value="${data.qq_app_secret || ''}">
+              </div>
+            </div>
+          </div>
+
+          <div id="socialTabContentFeishu" class="social-tab-content" style="display: none;">
+            <div class="form-section">
+              <div class="form-item">
+                <label class="form-label">启用飞书集成</label>
+                <select id="socialFeishuEnabled" class="form-input">
+                  <option value="true" ${data.feishu_enabled ? 'selected' : ''}>启用</option>
+                  <option value="false" ${!data.feishu_enabled ? 'selected' : ''}>禁用</option>
+                </select>
+              </div>
+            </div>
+            <div class="form-section">
+              <div class="form-item">
+                <label class="form-label">飞书 API URL</label>
+                <input type="text" id="socialFeishuApiUrl" class="form-input" placeholder="https://open.feishu.cn" value="${data.feishu_api_url || ''}">
+              </div>
+            </div>
+            <div class="form-section">
+              <div class="form-item">
+                <label class="form-label">飞书 App ID</label>
+                <input type="text" id="socialFeishuAppId" class="form-input" placeholder="飞书开放平台App ID" value="${data.feishu_app_id || ''}">
+              </div>
+            </div>
+            <div class="form-section">
+              <div class="form-item">
+                <label class="form-label">飞书 App Secret</label>
+                <input type="password" id="socialFeishuAppSecret" class="form-input" placeholder="飞书开放平台App Secret" value="${data.feishu_app_secret || ''}">
+              </div>
+            </div>
+          </div>
+
+          <div class="flex flex-wrap gap-2 items-center pt-4 border-t border-dark-border">
+            <button onclick="saveSocialSettings()" class="btn-primary">保存</button>
+          </div>
+        `;
+      } catch (e) {
+        document.getElementById('socialSettings').innerHTML = '<div class="text-sm text-red-500">加载失败</div>';
+      }
+    }
+
+    function switchSocialTab(tab) {
+      document.querySelectorAll('.social-tab-btn').forEach(btn => btn.classList.remove('active'));
+      document.querySelectorAll('.social-tab-content').forEach(content => content.style.display = 'none');
+      
+      document.getElementById('socialTab' + tab.charAt(0).toUpperCase() + tab.slice(1)).classList.add('active');
+      document.getElementById('socialTabContent' + tab.charAt(0).toUpperCase() + tab.slice(1)).style.display = 'block';
+    }
+
+    async function saveSocialSettings() {
+      const data = {
+        wechat_enabled: document.getElementById('socialWechatEnabled').value === 'true',
+        wechat_api_url: document.getElementById('socialWechatApiUrl').value,
+        wechat_token: document.getElementById('socialWechatToken').value,
+        wechat_aes_key: document.getElementById('socialWechatAesKey').value,
+        qq_enabled: document.getElementById('socialQqEnabled').value === 'true',
+        qq_api_url: document.getElementById('socialQqApiUrl').value,
+        qq_app_id: document.getElementById('socialQqAppId').value,
+        qq_app_secret: document.getElementById('socialQqAppSecret').value,
+        feishu_enabled: document.getElementById('socialFeishuEnabled').value === 'true',
+        feishu_api_url: document.getElementById('socialFeishuApiUrl').value,
+        feishu_app_id: document.getElementById('socialFeishuAppId').value,
+        feishu_app_secret: document.getElementById('socialFeishuAppSecret').value
+      };
+      try {
+        await fetch('/api/social-platforms', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(data)
+        });
+        alert('社交设置已保存');
+      } catch (e) {
+        alert('保存失败: ' + e.message);
+      }
+    }
+
+    // Chat
+    let chatSessionId = 'session_' + Date.now();
+    let isChatStreaming = false;
+
+    function loadChatHistory() {
+      const container = document.getElementById('chatHistoryList');
+      container.innerHTML = '<div class="px-4 py-3 text-xs text-text-muted text-center">暂无历史会话</div>';
+    }
+
+    async function sendMessage() {
+      const input = document.getElementById('chatInput');
+      const msg = input.value.trim();
+      if (!msg || isChatStreaming) return;
+
+      const container = document.getElementById('chatMessages');
+      if (container.querySelector('.text-center')) {
+        container.innerHTML = '';
+      }
+
+      // Show user message
+      // Show user message
+      container.innerHTML += `
+        <div class="flex justify-end animate-fade-in">
+          <div class="chat-message-user">${escapeHtml(msg)}</div>
+        </div>
+      `;
+      input.value = '';
+      container.scrollTop = container.scrollHeight;
+
+      addTraceLog(`[USER] ${msg}`);
+
+      const assistantId = 'assistant-' + Date.now();
+      container.innerHTML += `
+        <div class="flex justify-start animate-slide-up">
+          <div id="${assistantId}" class="chat-message-assistant">
+            <span class="text-text-muted animate-pulse">思考中...</span>
+          </div>
+        </div>
+      `;
+      container.scrollTop = container.scrollHeight;
+
+      isChatStreaming = true;
+      let assistantText = '';
+      const assistantEl = document.getElementById(assistantId);
+
+      try {
+        addTraceLog(`[DEBUG] 发送请求到 /api/chat/agent`);
+        addTraceLog(`[DEBUG] 使用 Agent: ${activeAgentId || 'default'}`);
+        const response = await fetch('/api/chat/agent', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message: msg, session_id: chatSessionId, agent_id: activeAgentId })
+        });
+
+        addTraceLog(`[DEBUG] 收到响应, 状态码: ${response.status}`);
+
+        if (!response.ok) {
+          const errorText = await response.text();
+          addTraceLog(`[DEBUG] 响应错误: ${errorText}`);
+          throw new Error(`HTTP ${response.status}: ${errorText}`);
+        }
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        let currentEventType = '';
+        let eventCount = 0;
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) {
+            addTraceLog(`[DEBUG] 流结束, 共收到 ${eventCount} 个事件`);
+            break;
+          }
+
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop() || '';
+
+          for (const line of lines) {
+            const trimmed = line.trim();
+            if (!trimmed) {
+              currentEventType = '';
+              continue;
+            }
+            if (trimmed.startsWith('event: ')) {
+              currentEventType = trimmed.slice(7).trim();
+            } else if (trimmed.startsWith('data: ')) {
+              if (!currentEventType) continue;
+              try {
+                const data = JSON.parse(trimmed.slice(6));
+                eventCount++;
+                if (currentEventType === 'text') {
+                  assistantText += data.text;
+                }
+                handleChatEvent(currentEventType, data, assistantEl, assistantId, assistantText);
+              } catch (e) {
+                addTraceLog(`[DEBUG] 解析数据失败: ${e.message}`);
+              }
+            }
+          }
+        }
+
+        addTraceLog(`[DEBUG] assistantText 长度: ${assistantText.length}, 内容: ${assistantText.substring(0, 100)}`);
+
+        if (!assistantText.trim()) {
+          assistantEl.innerHTML = '<span class="text-text-muted">响应完成 (无文本输出)</span>';
+          addTraceLog(`[WARN] 没有收到任何文本内容`);
+        }
+        addTraceLog('[AGENT] 响应完成');
+
+      } catch (e) {
+        if (assistantEl) {
+          assistantEl.innerHTML = `<span class="text-red-400">错误: ${escapeHtml(e.message)}</span>`;
+        }
+        addTraceLog(`[ERROR] ${e.message}`);
+      } finally {
+        isChatStreaming = false;
+        container.scrollTop = container.scrollHeight;
+      }
+    }
+
+    function handleChatEvent(eventType, data, assistantEl, assistantId, currentText) {
+      switch (eventType) {
+        case 'text':
+          if (assistantEl) {
+            assistantEl.innerHTML = marked.parse(currentText);
+            const chatContainer = document.getElementById('chatMessages');
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+          }
+          break;
+        case 'tool_start':
+          addTraceLog(`[TOOL] 执行 ${data.tool}...`);
+          break;
+        case 'tool_complete':
+          addTraceLog(`[TOOL] ${data.tool} 完成`);
+          break;
+        case 'status':
+          addTraceLog(`[STATUS] ${data.message}`);
+          break;
+        case 'error':
+          addTraceLog(`[ERROR] ${data.message}`);
+          if (assistantEl) {
+            assistantEl.innerHTML = `<span class="text-red-400">错误: ${escapeHtml(data.message)}</span>`;
+          }
+          break;
+        case 'done':
+          break;
+      }
+    }
+
+    function addTraceLog(log) {
+      const container = document.getElementById('traceLogs');
+      if (container.querySelector('.text-text-muted\\/50')) {
+        container.innerHTML = '';
+      }
+      const time = new Date().toLocaleTimeString();
+      const entry = document.createElement('div');
+      entry.className = 'trace-log animate-fade-in';
+      entry.innerHTML = `<span class="text-text-muted/40">[${time}]</span> ${escapeHtml(log)}`;
+      container.appendChild(entry);
+      container.scrollTop = container.scrollHeight;
+    }
+
+    function escapeHtml(text) {
+      const div = document.createElement('div');
+      div.textContent = text;
+      return div.innerHTML;
+    }
+
+    function hotReload() {
+      location.reload();
+    }
+
+    // Init
+    document.addEventListener('DOMContentLoaded', () => {
+      loadSettings();
+    });
+  </script>
+</body>
+</html>

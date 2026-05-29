@@ -555,6 +555,58 @@ class VisionModelConfig(BaseModel):
         return bool(self.model and self.api_key)
 
 
+class SocialPlatformConfig(BaseModel):
+    """Configuration for social platform integrations."""
+    
+    enabled: bool = False
+    wechat_enabled: bool = False
+    wechat_api_url: str = ""
+    wechat_token: str = ""
+    wechat_aes_key: str = ""
+    
+    qq_enabled: bool = False
+    qq_api_url: str = ""
+    qq_app_id: str = ""
+    qq_app_secret: str = ""
+    
+    feishu_enabled: bool = False
+    feishu_api_url: str = ""
+    feishu_app_id: str = ""
+    feishu_app_secret: str = ""
+
+
+class SearchApiConfig(BaseModel):
+    """Configuration for search API integrations."""
+    
+    enabled: bool = False
+    provider: str = "bing"  # bing, google, duckduckgo, custom
+    api_key: str = ""
+    base_url: str = ""
+    default_query: str = ""
+    max_results: int = 10
+
+
+class SkillManagementConfig(BaseModel):
+    """Configuration for skill management."""
+    
+    enabled: bool = True
+    auto_reload: bool = False
+    debug_mode: bool = False
+    skill_paths: list[str] = Field(default_factory=lambda: ["skills", ".openharness/skills"])
+    enabled_skills: list[str] = Field(default_factory=list)
+    disabled_skills: list[str] = Field(default_factory=list)
+
+
+class SessionManagementConfig(BaseModel):
+    """Configuration for session management."""
+    
+    auto_save: bool = True
+    max_sessions: int = 50
+    session_timeout_minutes: int = 60
+    auto_cleanup: bool = True
+    cleanup_interval_hours: int = 24
+
+
 class Settings(BaseModel):
     """Main settings model for OpenHarness."""
 
@@ -601,6 +653,18 @@ class Settings(BaseModel):
 
     # Image generation model
     image_generation: ImageGenerationConfig = Field(default_factory=ImageGenerationConfig)
+
+    # Social platform integrations
+    social_platforms: SocialPlatformConfig = Field(default_factory=SocialPlatformConfig)
+
+    # Search API configuration
+    search_api: SearchApiConfig = Field(default_factory=SearchApiConfig)
+
+    # Skill management
+    skill_management: SkillManagementConfig = Field(default_factory=SkillManagementConfig)
+
+    # Session management
+    session_management: SessionManagementConfig = Field(default_factory=SessionManagementConfig)
 
     def merged_profiles(self) -> dict[str, ProviderProfile]:
         """Return the saved profiles merged over the built-in catalog."""

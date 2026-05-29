@@ -49,9 +49,21 @@ def atomic_write_bytes(path: str | os.PathLike[str], data: bytes, *, mode: int |
     dst.parent.mkdir(parents=True, exist_ok=True)
     target_mode = _resolve_target_mode(dst, mode)
 
-    fd, tmp_name = tempfile.mkstemp(
-        prefix=f".{dst.name}.", suffix=".tmp", dir=str(dst.parent)
-    )
+    try:
+        fd, tmp_name = tempfile.mkstemp(
+            prefix=f".{dst.name}.", suffix=".tmp", dir=str(dst.parent)
+        )
+    except OSError:
+        # If we can't create a temp file (e.g., read-only filesystem in a
+        # sandbox), fall back to direct write. This loses atomicity but
+        # allows the operation to complete.
+        with dst.open("wb") as f:
+            f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
+        _apply_mode(dst, target_mode)
+        return
+
     tmp_path = Path(tmp_name)
     try:
         with os.fdopen(fd, "wb") as tmp_file:

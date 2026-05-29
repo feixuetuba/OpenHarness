@@ -52,7 +52,14 @@ def _exclusive_posix_lock(lock_path: Path) -> Iterator[None]:
         raise SwarmLockUnavailableError(f"fcntl not available: {exc}") from exc
 
     lock_path.parent.mkdir(parents=True, exist_ok=True)
-    lock_path.touch(exist_ok=True)
+    try:
+        lock_path.touch(exist_ok=True)
+    except OSError:
+        # If we can't create/touch the lock file (e.g., read-only filesystem
+        # in a sandbox), skip locking but still proceed safely.
+        yield
+        return
+
     with lock_path.open("a+b") as lock_file:
         fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
         try:
