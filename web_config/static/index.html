@@ -858,7 +858,7 @@
       </div>
 
       <!-- Chat Workspace (Dual Column) -->
-      <div id="workspaceChat" class="h-full hidden">
+      <div id="workspaceChat" class="h-full">
         <div class="h-full flex">
           <!-- Chat Area (70%) -->
           <div class="flex-1 flex flex-col border-r border-dark-border">
@@ -880,14 +880,25 @@
               </div>
             </div>
           </div>
+          <!-- Trace Panel Toggle Button (always visible) -->
+          <button id="tracePanelToggleBtn" onclick="toggleTracePanel()" class="flex items-center justify-center w-6 bg-dark-card hover:bg-dark-card-hover border-l border-r border-dark-border transition-colors duration-200" title="折叠/展开 Harness Trace">
+            <svg id="tracePanelToggleBtnIcon" class="w-4 h-4 text-text-muted" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 5l7 7-7 7M5 5l7 7-7 7"/></svg>
+          </button>
           <!-- Trace Panel (30%) -->
-          <div class="w-[30%] min-w-[280px] flex flex-col bg-dark-bg/50">
-            <div class="px-4 py-3 border-b border-dark-border flex items-center gap-2">
-              <svg class="w-4 h-4 text-text-muted" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/></svg>
-              <h3 class="text-xs font-semibold text-text-muted uppercase tracking-wider">Harness Trace</h3>
+          <div id="tracePanel" class="w-[30%] min-w-[280px] flex flex-col bg-dark-bg/50 border-l-0 transition-all duration-300">
+            <div class="px-4 py-3 border-b border-dark-border flex items-center justify-between gap-2">
+              <div class="flex items-center gap-2">
+                <svg class="w-4 h-4 text-text-muted" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/></svg>
+                <h3 class="text-xs font-semibold text-text-muted uppercase tracking-wider">Harness Trace</h3>
+              </div>
+              <button onclick="toggleTracePanel()" class="p-1 hover:bg-dark-bg-secondary rounded transition-colors" title="折叠/展开">
+                <svg id="tracePanelToggleIcon" class="w-4 h-4 text-text-muted" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 19l-7-7 7-7m8 14l-7-7 7-7"/></svg>
+              </button>
             </div>
-            <div id="traceLogs" class="flex-1 overflow-y-auto chat-scroll p-3 font-mono text-xs space-y-1">
-              <div class="text-text-muted/50">等待运行日志...</div>
+            <div id="tracePanelContent" class="flex-1 overflow-hidden">
+              <div id="traceLogs" class="h-full overflow-y-auto chat-scroll p-3 font-mono text-xs space-y-1">
+                <div class="text-text-muted/50">等待运行日志...</div>
+              </div>
             </div>
           </div>
         </div>
@@ -897,8 +908,9 @@
 
   <script>
     // State
-    let currentNav = 'settings';
-    let currentSubView = 'providers';
+    let currentNav = 'chat';
+    let currentSubView = 'agents';
+    let tracePanelCollapsed = true;
     let activeProfileName = '';
     let currentAuthSource = '';
     let editingAgentId = null;
@@ -916,6 +928,35 @@
       document.getElementById('workspaceChat').classList.toggle('hidden', nav !== 'chat');
       if (nav === 'chat') {
         loadChatHistory();
+        applyTracePanelState();
+      }
+    }
+
+    function toggleTracePanel() {
+      tracePanelCollapsed = !tracePanelCollapsed;
+      applyTracePanelState();
+    }
+
+    function applyTracePanelState() {
+      const panel = document.getElementById('tracePanel');
+      const content = document.getElementById('tracePanelContent');
+      const icon = document.getElementById('tracePanelToggleIcon');
+      const toggleBtnIcon = document.getElementById('tracePanelToggleBtnIcon');
+      
+      if (tracePanelCollapsed) {
+        panel.style.width = '0';
+        panel.style.minWidth = '0';
+        panel.style.overflow = 'hidden';
+        content.style.display = 'none';
+        icon.innerHTML = '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 5l7 7-7 7M5 5l7 7-7 7"/>';
+        toggleBtnIcon.innerHTML = '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 5l7 7-7 7M5 5l7 7-7 7"/>';
+      } else {
+        panel.style.width = '30%';
+        panel.style.minWidth = '280px';
+        panel.style.overflow = '';
+        content.style.display = '';
+        icon.innerHTML = '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 19l-7-7 7-7m8 14l-7-7 7-7"/>';
+        toggleBtnIcon.innerHTML = '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 19l-7-7 7-7m8 14l-7-7 7-7"/>';
       }
     }
 
@@ -2434,6 +2475,9 @@
     // Init
     document.addEventListener('DOMContentLoaded', () => {
       loadSettings();
+      switchPrimaryNav('chat');
+      switchSubView('agents');
+      applyTracePanelState();
     });
   </script>
 </body>
