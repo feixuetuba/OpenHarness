@@ -1977,19 +1977,101 @@
         container.innerHTML = '<div class="text-sm text-text-muted">暂无会话</div>';
         return;
       }
-      container.innerHTML = sessions.map(s => `
+      container.innerHTML = sessions.map(s => {
+        const sessionId = s.id || s.session_id || 'Unknown';
+        const summary = s.summary || sessionId;
+        const messageCount = s.message_count || 0;
+        const forkedFrom = s.forked_from ? `<span class="text-xs text-accent-blue ml-2">[派生自 ${s.forked_from}]</span>` : '';
+        return `
         <div class="flex flex-wrap gap-3 items-center p-3.5 bg-dark-bg-secondary border border-dark-border rounded-lg animate-fade-in">
           <div class="flex-1 min-w-[150px]">
-            <span class="text-sm font-medium text-text-primary">${s.id || s.session_id || 'Unknown'}</span>
+            <span class="text-sm font-medium text-text-primary">${escapeHtml(summary)}</span>
+            ${forkedFrom}
           </div>
           <div class="flex-1 min-w-[200px]">
-            <span class="text-xs text-text-secondary truncate block">${s.created_at || ''}</span>
+            <span class="text-xs text-text-secondary">${sessionId}</span>
+            <span class="text-xs text-text-muted ml-2">${messageCount} 条消息</span>
           </div>
           <div class="flex flex-wrap gap-2 items-center ml-auto">
-            <button onclick="deleteSession('${s.id || s.session_id}')" class="btn-danger text-xs px-2.5 py-1.5">删除</button>
+            <button onclick="forkSessionFromList('${sessionId}')" class="btn-secondary text-xs px-2.5 py-1.5" title="从对话中派生">
+              <svg class="w-3.5 h-3.5 inline mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z"/>
+              </svg>
+              派生
+            </button>
+            <button onclick="deleteSession('${sessionId}')" class="btn-danger text-xs px-2.5 py-1.5">删除</button>
           </div>
         </div>
-      `).join('');
+      `}).join('');
+    }
+
+    async function forkSessionFromList(sessionId) {
+      try {
+        const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/user-messages`);
+        const data = await res.json();
+        
+        if (data.error || !data.user_messages || data.user_messages.length === 0) {
+          alert('该会话中没有用户消息，无法派生');
+          return;
+        }
+
+        const userMessages = data.user_messages;
+        const messageOptions = userMessages.map((um, idx) => {
+          return `<option value="${um.index}">[${um.index}] ${escapeHtml(um.preview)}</option>`;
+        }).join('');
+
+        const dialogHtml = `
+          <div id="forkDialogOverlay" style="position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.7); z-index: 1000; display: flex; align-items: center; justify-content: center;">
+            <div style="background: #1e1e2e; border: 1px solid #313244; border-radius: 8px; padding: 24px; max-width: 600px; width: 90%; max-height: 80vh; overflow-y: auto;">
+              <h3 style="color: #cdd6f4; margin: 0 0 16px 0; font-size: 18px;">从对话中派生新会话</h3>
+              <p style="color: #a6adc8; font-size: 14px; margin-bottom: 16px;">选择要派生的用户消息位置：</p>
+              <select id="forkMessageIndex" style="width: 100%; padding: 8px; background: #181825; border: 1px solid #313244; border-radius: 4px; color: #cdd6f4; margin-bottom: 16px;">
+                ${messageOptions}
+              </select>
+              <div style="margin-bottom: 16px;">
+                <label style="color: #a6adc8; font-size: 14px; display: block; margin-bottom: 8px;">新会话 ID（可选）：</label>
+                <input type="text" id="forkNewSessionId" placeholder="留空将自动生成" style="width: 100%; padding: 8px; background: #181825; border: 1px solid #313244; border-radius: 4px; color: #cdd6f4;">
+              </div>
+              <div style="display: flex; gap: 12px; justify-content: flex-end;">
+                <button onclick="closeForkDialog()" style="padding: 8px 16px; background: #313244; border: none; border-radius: 4px; color: #cdd6f4; cursor: pointer;">取消</button>
+                <button onclick="executeForkFromList('${sessionId}')" style="padding: 8px 16px; background: #89b4fa; border: none; border-radius: 4px; color: #1e1e2e; cursor: pointer; font-weight: 500;">派生</button>
+              </div>
+            </div>
+          </div>
+        `;
+
+        document.body.insertAdjacentHTML('beforeend', dialogHtml);
+      } catch (e) {
+        alert('加载用户消息失败: ' + e.message);
+      }
+    }
+
+    async function executeForkFromList(sessionId) {
+      const messageIndex = parseInt(document.getElementById('forkMessageIndex').value);
+      const newSessionId = document.getElementById('forkNewSessionId').value.trim() || undefined;
+
+      try {
+        const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/fork`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            message_index: messageIndex,
+            new_session_id: newSessionId,
+          }),
+        });
+
+        const data = await res.json();
+        if (data.error) {
+          alert('派生失败: ' + data.error);
+          return;
+        }
+
+        closeForkDialog();
+        alert(`派生成功！\n新会话 ID: ${data.forked_session_id}\n从消息 ${data.forked_at_index} 处派生`);
+        await loadSessions();
+      } catch (e) {
+        alert('派生失败: ' + e.message);
+      }
     }
 
     async function deleteSession(id) {
@@ -2244,14 +2326,97 @@
               <div class="text-xs text-text-primary truncate">${escapeHtml(summary)}</div>
               <div class="text-xs text-text-muted/60 mt-1">${timeStr}</div>
             </div>
-            <button onclick="event.stopPropagation(); deleteChatSession('${sessionId}')" class="opacity-0 group-hover:opacity-100 p-1 hover:text-red-400 transition-opacity duration-150" title="删除会话">
-              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
-              </svg>
-            </button>
+            <div class="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity duration-150">
+              <button onclick="event.stopPropagation(); showForkSessionDialog('${sessionId}')" class="p-1 hover:text-accent-blue transition-colors duration-150" title="从对话中派生">
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z"/>
+                </svg>
+              </button>
+              <button onclick="event.stopPropagation(); deleteChatSession('${sessionId}')" class="p-1 hover:text-red-400 transition-colors duration-150" title="删除会话">
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
+                </svg>
+              </button>
+            </div>
           </div>
         </div>
       `}).join('');
+    }
+
+    async function showForkSessionDialog(sessionId) {
+      try {
+        const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/user-messages`);
+        const data = await res.json();
+        
+        if (data.error || !data.user_messages || data.user_messages.length === 0) {
+          alert('该会话中没有用户消息，无法派生');
+          return;
+        }
+
+        const userMessages = data.user_messages;
+        const messageOptions = userMessages.map((um, idx) => {
+          return `<option value="${um.index}">[${um.index}] ${escapeHtml(um.preview)}</option>`;
+        }).join('');
+
+        const dialogHtml = `
+          <div id="forkDialogOverlay" style="position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.7); z-index: 1000; display: flex; align-items: center; justify-content: center;">
+            <div style="background: #1e1e2e; border: 1px solid #313244; border-radius: 8px; padding: 24px; max-width: 600px; width: 90%; max-height: 80vh; overflow-y: auto;">
+              <h3 style="color: #cdd6f4; margin: 0 0 16px 0; font-size: 18px;">从对话中派生新会话</h3>
+              <p style="color: #a6adc8; font-size: 14px; margin-bottom: 16px;">选择要派生的用户消息位置：</p>
+              <select id="forkMessageIndex" style="width: 100%; padding: 8px; background: #181825; border: 1px solid #313244; border-radius: 4px; color: #cdd6f4; margin-bottom: 16px;">
+                ${messageOptions}
+              </select>
+              <div style="margin-bottom: 16px;">
+                <label style="color: #a6adc8; font-size: 14px; display: block; margin-bottom: 8px;">新会话 ID（可选）：</label>
+                <input type="text" id="forkNewSessionId" placeholder="留空将自动生成" style="width: 100%; padding: 8px; background: #181825; border: 1px solid #313244; border-radius: 4px; color: #cdd6f4;">
+              </div>
+              <div style="display: flex; gap: 12px; justify-content: flex-end;">
+                <button onclick="closeForkDialog()" style="padding: 8px 16px; background: #313244; border: none; border-radius: 4px; color: #cdd6f4; cursor: pointer;">取消</button>
+                <button onclick="executeFork('${sessionId}')" style="padding: 8px 16px; background: #89b4fa; border: none; border-radius: 4px; color: #1e1e2e; cursor: pointer; font-weight: 500;">派生</button>
+              </div>
+            </div>
+          </div>
+        `;
+
+        document.body.insertAdjacentHTML('beforeend', dialogHtml);
+      } catch (e) {
+        alert('加载用户消息失败: ' + e.message);
+      }
+    }
+
+    function closeForkDialog() {
+      const overlay = document.getElementById('forkDialogOverlay');
+      if (overlay) {
+        overlay.remove();
+      }
+    }
+
+    async function executeFork(sessionId) {
+      const messageIndex = parseInt(document.getElementById('forkMessageIndex').value);
+      const newSessionId = document.getElementById('forkNewSessionId').value.trim() || undefined;
+
+      try {
+        const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/fork`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            message_index: messageIndex,
+            new_session_id: newSessionId,
+          }),
+        });
+
+        const data = await res.json();
+        if (data.error) {
+          alert('派生失败: ' + data.error);
+          return;
+        }
+
+        closeForkDialog();
+        alert(`派生成功！\n新会话 ID: ${data.forked_session_id}\n从消息 ${data.forked_at_index} 处派生`);
+        await loadChatHistory();
+      } catch (e) {
+        alert('派生失败: ' + e.message);
+      }
     }
 
     async function deleteChatSession(id) {

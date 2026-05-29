@@ -207,6 +207,123 @@ def load_session_by_id(cwd: str | Path, session_id: str) -> dict[str, Any] | Non
     return None
 
 
+def fork_session_from_message(
+    *,
+    cwd: str | Path,
+    source_session_id: str,
+    fork_at_message_index: int,
+    new_session_id: str | None = None,
+) -> Path | None:
+    """Fork a session from a specific message index.
+
+    Creates a new session that contains all messages up to (and including)
+    the specified message index from the source session.
+
+    Args:
+        cwd: The working directory.
+        source_session_id: The session ID to fork from.
+        fork_at_message_index: The index of the message to fork at (0-based).
+            The new session will include all messages up to and including this index.
+        new_session_id: Optional session ID for the new forked session.
+
+    Returns:
+        The path to the new session file, or None if the source session was not found.
+    """
+    source_data = load_session_by_id(cwd, source_session_id)
+    if source_data is None:
+        return None
+
+    messages_raw = source_data.get("messages", [])
+    if not messages_raw:
+        return None
+
+    # Clamp the index to valid range
+    fork_at_message_index = max(0, min(fork_at_message_index, len(messages_raw) - 1))
+
+    # Slice messages up to and including the fork point
+    forked_messages_raw = messages_raw[: fork_at_message_index + 1]
+
+    # Convert to ConversationMessage objects and sanitize
+    forked_messages = sanitize_conversation_messages(
+        [ConversationMessage.model_validate(item) for item in forked_messages_raw]
+    )
+
+    # Extract summary from the forked messages
+    summary = ""
+    for msg in forked_messages:
+        if msg.role == "user" and msg.text.strip():
+            summary = msg.text.strip()[:80]
+            break
+
+    session_dir = get_project_session_dir(cwd)
+    sid = new_session_id or uuid4().hex[:12]
+    now = time.time()
+
+    payload = {
+        "session_id": sid,
+        "cwd": str(Path(cwd).resolve()),
+        "model": source_data.get("model", ""),
+        "system_prompt": source_data.get("system_prompt", ""),
+        "messages": [message.model_dump(mode="json") for message in forked_messages],
+        "usage": {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "cache_creation_tokens": 0,
+            "cache_read_tokens": 0,
+        },
+        "tool_metadata": {},
+        "created_at": now,
+        "summary": f"[Fork] {summary}" if summary else "[Forked session]",
+        "message_count": len(forked_messages),
+        "forked_from": source_session_id,
+        "forked_at_index": fork_at_message_index,
+    }
+    data = json.dumps(payload, indent=2) + "\n"
+
+    # Save as latest
+    latest_path = session_dir / "latest.json"
+    atomic_write_text(latest_path, data)
+
+    # Save by session ID
+    session_path = session_dir / f"session-{sid}.json"
+    atomic_write_text(session_path, data)
+
+    return session_path
+
+
+def list_user_messages_in_session(
+    cwd: str | Path,
+    session_id: str,
+) -> list[dict[str, Any]]:
+    """List all user messages in a session with their indices.
+
+    Returns a list of dicts with 'index', 'text', and 'preview' keys.
+    """
+    session_data = load_session_by_id(cwd, session_id)
+    if session_data is None:
+        return []
+
+    messages = session_data.get("messages", [])
+    user_messages = []
+
+    for idx, msg in enumerate(messages):
+        if msg.get("role") == "user":
+            # Extract text content
+            texts = []
+            for block in msg.get("content", []):
+                if block.get("type") == "text":
+                    texts.append(block.get("text", ""))
+
+            full_text = " ".join(texts).strip()
+            user_messages.append({
+                "index": idx,
+                "text": full_text,
+                "preview": full_text[:100] + ("..." if len(full_text) > 100 else ""),
+            })
+
+    return user_messages
+
+
 def export_session_markdown(
     *,
     cwd: str | Path,

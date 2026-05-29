@@ -1747,6 +1747,97 @@ def _login_provider(provider: str) -> None:
     raise typer.Exit(1)
 
 
+@app.command("fork")
+def fork_session(
+    session_id: str = typer.Argument(..., help="Session ID to fork from"),
+    message_index: int = typer.Argument(
+        ...,
+        help="Index of the user message to fork at (0-based, use 'fork list' to see available messages)",
+    ),
+    new_id: str | None = typer.Option(
+        None,
+        "--id",
+        help="Optional session ID for the new forked session",
+    ),
+    cwd: str = typer.Option(
+        str(Path.cwd()),
+        "--cwd",
+        help="Working directory",
+    ),
+) -> None:
+    """Fork a session from a specific user message.
+
+    Creates a new session containing all messages up to and including
+    the specified user message from the source session.
+    """
+    from openharness.services.session_storage import (
+        fork_session_from_message,
+        list_user_messages_in_session,
+    )
+
+    user_messages = list_user_messages_in_session(cwd, session_id)
+    if not user_messages:
+        print(f"No user messages found in session: {session_id}", file=sys.stderr)
+        raise typer.Exit(1)
+
+    # Validate message index
+    valid_indices = {um["index"] for um in user_messages}
+    if message_index not in valid_indices:
+        print(f"Message index {message_index} is not a user message.", file=sys.stderr)
+        print(f"Valid user message indices: {sorted(valid_indices)}", file=sys.stderr)
+        raise typer.Exit(1)
+
+    result_path = fork_session_from_message(
+        cwd=cwd,
+        source_session_id=session_id,
+        fork_at_message_index=message_index,
+        new_session_id=new_id,
+    )
+
+    if result_path is None:
+        print(f"Failed to fork session: {session_id}", file=sys.stderr)
+        raise typer.Exit(1)
+
+    selected_msg = next((um for um in user_messages if um["index"] == message_index), None)
+    print(f"Forked session created successfully!")
+    print(f"  Source session: {session_id}")
+    print(f"  Forked at message index: {message_index}")
+    if selected_msg:
+        print(f"  Forked at message: {selected_msg['preview'][:60]}")
+    print(f"  New session file: {result_path}")
+    print(f"\nTo continue from this fork, run:")
+    print(f"  oh --resume {new_id or result_path.stem.replace('session-', '')}")
+
+
+@app.command("fork-list")
+def fork_list_sessions(
+    session_id: str = typer.Argument(..., help="Session ID to list user messages from"),
+    cwd: str = typer.Option(
+        str(Path.cwd()),
+        "--cwd",
+        help="Working directory",
+    ),
+) -> None:
+    """List all user messages in a session with their indices.
+
+    Use this to find the message index for forking.
+    """
+    from openharness.services.session_storage import list_user_messages_in_session
+
+    user_messages = list_user_messages_in_session(cwd, session_id)
+    if not user_messages:
+        print(f"No user messages found in session: {session_id}", file=sys.stderr)
+        raise typer.Exit(1)
+
+    print(f"User messages in session: {session_id}")
+    print(f"{'Index':<8} {'Preview'}")
+    print("-" * 80)
+    for um in user_messages:
+        print(f"{um['index']:<8} {um['preview']}")
+    print(f"\nTo fork from a message, run:")
+    print(f"  oh fork <session_id> <index>")
+
+
 @app.command("setup")
 def setup_cmd(
     profile: str | None = typer.Argument(None, help="Provider profile name to configure"),

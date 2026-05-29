@@ -1364,6 +1364,72 @@ async def get_latest_session():
         return {"error": str(e), "session": None}
 
 
+@app.get("/api/sessions/{session_id}/user-messages")
+async def list_session_user_messages(session_id: str):
+    """List all user messages in a session with their indices."""
+    try:
+        from openharness.services.session_storage import list_user_messages_in_session
+
+        user_messages = list_user_messages_in_session(Path.cwd(), session_id)
+        return {"user_messages": user_messages}
+    except Exception as e:
+        return {"error": str(e), "user_messages": []}
+
+
+@app.post("/api/sessions/{session_id}/fork")
+async def fork_session(session_id: str, data: dict):
+    """Fork a session from a specific message index.
+
+    Request body:
+    {
+        "message_index": 5,  // Index of the user message to fork at
+        "new_session_id": "my-fork"  // Optional new session ID
+    }
+    """
+    try:
+        from openharness.services.session_storage import (
+            fork_session_from_message,
+            list_user_messages_in_session,
+        )
+
+        message_index = data.get("message_index")
+        if message_index is None:
+            raise HTTPException(status_code=400, detail="message_index is required")
+
+        # Validate message index
+        user_messages = list_user_messages_in_session(Path.cwd(), session_id)
+        valid_indices = {um["index"] for um in user_messages}
+        if message_index not in valid_indices:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Message index {message_index} is not a user message. Valid indices: {sorted(valid_indices)}",
+            )
+
+        new_session_id = data.get("new_session_id")
+        result_path = fork_session_from_message(
+            cwd=Path.cwd(),
+            source_session_id=session_id,
+            fork_at_message_index=message_index,
+            new_session_id=new_session_id,
+        )
+
+        if result_path is None:
+            raise HTTPException(status_code=500, detail="Failed to fork session")
+
+        forked_session_id = new_session_id or result_path.stem.replace("session-", "")
+        return {
+            "status": "ok",
+            "message": f"Forked session from message {message_index}",
+            "forked_session_id": forked_session_id,
+            "source_session_id": session_id,
+            "forked_at_index": message_index,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        return {"error": str(e)}
+
+
 # ---------------------------------------------------------------------------
 # Tasks API
 # ---------------------------------------------------------------------------

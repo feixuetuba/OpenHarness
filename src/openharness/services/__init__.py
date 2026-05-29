@@ -9,7 +9,9 @@ from openharness.services.compact import (
 )
 from openharness.services.session_storage import (
     export_session_markdown,
+    fork_session_from_message,
     get_project_session_dir,
+    list_user_messages_in_session,
     load_session_snapshot,
     save_session_snapshot,
 )
@@ -23,7 +25,9 @@ __all__ = [
     "estimate_message_tokens",
     "estimate_tokens",
     "export_session_markdown",
+    "fork_session_from_message",
     "get_project_session_dir",
+    "list_user_messages_in_session",
     "load_session_snapshot",
     "save_session_snapshot",
     "summarize_messages",
