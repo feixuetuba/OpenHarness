@@ -213,6 +213,12 @@ class AgentConfig(BaseModel):
     max_turns: int | None = None
 
 
+class AgentChatRequest(BaseModel):
+    message: str
+    session_id: str | None = None
+    agent_id: str | None = None
+
+
 @app.get("/")
 async def index():
     """Serve the main configuration page."""
@@ -991,9 +997,115 @@ async def test_connection(req: dict):
 
 
 @app.post("/api/chat/agent")
-async def chat_with_agent():
-    """Return a clear response for chat when the web agent loop is not wired."""
-    raise HTTPException(status_code=501, detail="Web agent chat is not implemented in this server build yet.")
+async def chat_with_agent(req: AgentChatRequest):
+    """Stream a web chat turn through the OpenHarness query engine."""
+    message = req.message.strip()
+    if not message:
+        raise HTTPException(status_code=400, detail="message is required")
+
+    async def _event_stream():
+        import asyncio
+        import time
+
+        from openharness.engine.stream_events import (
+            AssistantTextDelta,
+            AssistantTurnComplete,
+            CompactProgressEvent,
+            ErrorEvent,
+            StatusEvent,
+            ToolExecutionCompleted,
+            ToolExecutionStarted,
+        )
+        from openharness.services import session_storage
+        from openharness.ui.runtime import build_runtime, close_runtime
+
+        def sse(event: str, data: dict[str, Any]) -> str:
+            return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+        bundle = None
+
+        try:
+            payload = _load_agents_payload()
+            agent = None
+            agent_id = (req.agent_id or payload.get("active_agent_id") or "").strip()
+            if agent_id:
+                agent = next((item for item in payload["agents"] if item.get("id") == agent_id), None)
+
+            session_id = (req.session_id or "").strip() or f"session_{int(time.time() * 1000)}"
+            saved_session = session_storage.load_session_by_id(Path.cwd(), session_id)
+            restore_messages = saved_session.get("messages") if saved_session else None
+            restore_metadata = saved_session.get("tool_metadata") if saved_session else None
+
+            yield sse("status", {"message": "Starting agent session..."})
+            bundle = await build_runtime(
+                prompt=message,
+                cwd=str(Path.cwd()),
+                model=agent.get("model") if agent else None,
+                max_turns=agent.get("max_turns") if agent else None,
+                system_prompt=agent.get("system_prompt") if agent else None,
+                restore_messages=restore_messages,
+                restore_tool_metadata=restore_metadata,
+                permission_prompt=lambda _tool, _reason: asyncio.sleep(0, result=False),
+                ask_user_prompt=lambda _question: asyncio.sleep(0, result=""),
+                edit_approval_prompt=lambda _path, _diff, _added, _removed: asyncio.sleep(0, result="reject"),
+            )
+            bundle.session_id = session_id
+            bundle.engine.tool_metadata["session_id"] = session_id
+
+            async for event in bundle.engine.submit_message(message):
+                if isinstance(event, AssistantTextDelta):
+                    yield sse("text", {"text": event.text})
+                elif isinstance(event, ToolExecutionStarted):
+                    yield sse("tool_start", {"tool": event.tool_name, "input": event.tool_input})
+                elif isinstance(event, ToolExecutionCompleted):
+                    yield sse(
+                        "tool_complete",
+                        {
+                            "tool": event.tool_name,
+                            "output": event.output,
+                            "is_error": event.is_error,
+                            "metadata": event.metadata or {},
+                        },
+                    )
+                elif isinstance(event, StatusEvent):
+                    yield sse("status", {"message": event.message})
+                elif isinstance(event, CompactProgressEvent):
+                    yield sse(
+                        "status",
+                        {
+                            "message": event.message or event.phase,
+                            "phase": event.phase,
+                            "trigger": event.trigger,
+                        },
+                    )
+                elif isinstance(event, ErrorEvent):
+                    yield sse("error", {"message": event.message, "recoverable": event.recoverable})
+                elif isinstance(event, AssistantTurnComplete):
+                    continue
+
+            settings = bundle.current_settings()
+            bundle.session_backend.save_snapshot(
+                cwd=bundle.cwd,
+                model=bundle.engine.model or settings.model,
+                system_prompt=bundle.engine.system_prompt,
+                messages=bundle.engine.messages,
+                usage=bundle.engine.total_usage,
+                session_id=session_id,
+                tool_metadata=bundle.engine.tool_metadata,
+            )
+            yield sse("done", {"session_id": session_id})
+        except SystemExit as exc:
+            yield sse("error", {"message": str(exc) or "Runtime initialization failed"})
+        except Exception as exc:
+            yield sse("error", {"message": str(exc) or exc.__class__.__name__})
+        finally:
+            if bundle is not None:
+                try:
+                    await close_runtime(bundle)
+                except Exception:
+                    pass
+
+    return StreamingResponse(_event_stream(), media_type="text/event-stream")
 
 
 @app.get("/api/mcp-servers")
