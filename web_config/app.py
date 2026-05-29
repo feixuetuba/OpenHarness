@@ -638,7 +638,8 @@ class ChatMessage(BaseModel):
 async def chat_with_agent(req: ChatMessage):
     """Chat endpoint with full Agent Loop (Tools + Skills + Sessions)."""
     from openharness.config import load_settings
-    from openharness.api.client import create_api_client
+    from openharness.api.client import AnthropicApiClient
+    from openharness.api.openai_client import OpenAICompatibleClient
     from openharness.tools import create_default_tool_registry
     from openharness.permissions.checker import PermissionChecker
     from openharness.engine.query_engine import QueryEngine
@@ -682,12 +683,17 @@ async def chat_with_agent(req: ChatMessage):
 
     async def agent_stream():
         try:
-            api_client = create_api_client(
-                api_format=api_format,
-                api_key=api_key,
-                base_url=base_url,
-                model=model,
-            )
+            if api_format in ("openai", "openai_compat"):
+                api_client = OpenAICompatibleClient(
+                    api_key=api_key,
+                    base_url=base_url,
+                    timeout=settings.timeout,
+                )
+            else:
+                api_client = AnthropicApiClient(
+                    api_key=api_key,
+                    base_url=base_url,
+                )
 
             mcp_manager = MCPClientManager()
             await mcp_manager.connect_all(settings.mcp_servers)
