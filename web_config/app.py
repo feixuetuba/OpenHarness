@@ -645,14 +645,14 @@ async def chat_with_agent(req: ChatMessage):
     from openharness.engine.query_engine import QueryEngine
     from openharness.engine.messages import ConversationMessage
     from openharness.engine.stream_events import (
-        TextStreamEvent,
+        AssistantTextDelta,
         ToolExecutionStarted,
         ToolExecutionCompleted,
         AssistantTurnComplete,
     )
     from openharness.services.session_storage import SessionBackend
     from openharness.skills import load_skill_registry
-    from openharness.mcp.client import MCPClientManager
+    from openharness.mcp.client import McpClientManager
 
     settings = load_settings().materialize_active_profile()
     
@@ -695,7 +695,7 @@ async def chat_with_agent(req: ChatMessage):
                     base_url=base_url,
                 )
 
-            mcp_manager = MCPClientManager()
+            mcp_manager = McpClientManager()
             await mcp_manager.connect_all(settings.mcp_servers)
 
             tool_registry = create_default_tool_registry(mcp_manager)
@@ -727,7 +727,7 @@ async def chat_with_agent(req: ChatMessage):
             user_message = ConversationMessage.from_user_text(req.message)
             
             async for event in engine.submit_message(user_message):
-                if isinstance(event, TextStreamEvent):
+                if isinstance(event, AssistantTextDelta):
                     yield f"event: text\ndata: {json.dumps({'text': event.text})}\n\n"
                 elif isinstance(event, ToolExecutionStarted):
                     tool_data = {
@@ -1097,10 +1097,10 @@ async def toggle_mcp_server(server_name: str):
 async def list_mcp_tools():
     """List all tools from connected MCP servers."""
     from openharness.config import load_settings
-    from openharness.mcp.client import MCPClientManager
+    from openharness.mcp.client import McpClientManager
 
     settings = load_settings()
-    manager = MCPClientManager()
+    manager = McpClientManager()
     try:
         await manager.connect_all(settings.mcp_servers)
         tools = await manager.list_tools()
@@ -1113,10 +1113,10 @@ async def list_mcp_tools():
 async def list_mcp_resources():
     """List all resources from connected MCP servers."""
     from openharness.config import load_settings
-    from openharness.mcp.client import MCPClientManager
+    from openharness.mcp.client import McpClientManager
 
     settings = load_settings()
-    manager = MCPClientManager()
+    manager = McpClientManager()
     try:
         await manager.connect_all(settings.mcp_servers)
         resources = await manager.list_resources()
