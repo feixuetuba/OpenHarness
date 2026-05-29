@@ -650,7 +650,7 @@ async def chat_with_agent(req: ChatMessage):
         ToolExecutionCompleted,
         AssistantTurnComplete,
     )
-    from openharness.services.session_storage import SessionBackend
+    from openharness.services.session_backend import OpenHarnessSessionBackend
     from openharness.skills import load_skill_registry
     from openharness.mcp.client import McpClientManager
 
@@ -695,8 +695,8 @@ async def chat_with_agent(req: ChatMessage):
                     base_url=base_url,
                 )
 
-            mcp_manager = McpClientManager()
-            await mcp_manager.connect_all(settings.mcp_servers)
+            mcp_manager = McpClientManager(settings.mcp_servers)
+            await mcp_manager.connect_all()
 
             tool_registry = create_default_tool_registry(mcp_manager)
 
@@ -718,11 +718,15 @@ async def chat_with_agent(req: ChatMessage):
                 },
             )
 
-            session_backend = SessionBackend(cwd)
+            session_backend = OpenHarnessSessionBackend()
             if session_id != "default":
                 snapshot = session_backend.load_by_id(cwd, session_id)
                 if snapshot and snapshot.get("messages"):
-                    engine.load_messages(snapshot["messages"])
+                    from openharness.engine.messages import sanitize_conversation_messages
+                    restored = sanitize_conversation_messages(
+                        [ConversationMessage.model_validate(m) for m in snapshot["messages"]]
+                    )
+                    engine.load_messages(restored)
 
             user_message = ConversationMessage.from_user_text(req.message)
             
@@ -745,12 +749,16 @@ async def chat_with_agent(req: ChatMessage):
                     yield f"event: done\ndata: {json.dumps({})}\n\n"
 
             if settings.memory.session_memory_enabled:
-                session_backend.save_session(
-                    session_id=session_id,
+                session_backend.save_snapshot(
+                    cwd=cwd,
+                    model=model,
+                    system_prompt=system_prompt or "",
                     messages=engine.messages,
+                    usage=engine.total_usage,
+                    session_id=session_id,
                 )
 
-            await mcp_manager.disconnect_all()
+            await mcp_manager.close()
 
         except Exception as e:
             yield f"event: error\ndata: {json.dumps({'message': str(e)})}\n\n"
@@ -1100,13 +1108,13 @@ async def list_mcp_tools():
     from openharness.mcp.client import McpClientManager
 
     settings = load_settings()
-    manager = McpClientManager()
+    manager = McpClientManager(settings.mcp_servers)
     try:
-        await manager.connect_all(settings.mcp_servers)
-        tools = await manager.list_tools()
+        await manager.connect_all()
+        tools = manager.list_tools()
         return tools
     finally:
-        await manager.disconnect_all()
+        await manager.close()
 
 
 @app.get("/api/mcp/resources")
@@ -1116,13 +1124,13 @@ async def list_mcp_resources():
     from openharness.mcp.client import McpClientManager
 
     settings = load_settings()
-    manager = McpClientManager()
+    manager = McpClientManager(settings.mcp_servers)
     try:
-        await manager.connect_all(settings.mcp_servers)
-        resources = await manager.list_resources()
+        await manager.connect_all()
+        resources = manager.list_resources()
         return resources
     finally:
-        await manager.disconnect_all()
+        await manager.close()
 
 
 # ---------------------------------------------------------------------------
