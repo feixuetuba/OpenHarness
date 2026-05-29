@@ -2,7 +2,6 @@
 """Start the OpenHarness Web Configuration Manager."""
 
 import argparse
-import os
 import sys
 from pathlib import Path
 
@@ -10,21 +9,6 @@ from pathlib import Path
 project_root = Path(__file__).parent.parent / "src"
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
-
-# Ensure config directory is writable (use project-local .openharness if home is read-only)
-config_dir = os.environ.get("OPENHARNESS_CONFIG_DIR")
-if config_dir is None:
-    project_config = project_root.parent / ".openharness"
-    try:
-        project_config.mkdir(parents=True, exist_ok=True)
-        # Test if writable
-        test_file = project_config / ".write_test"
-        test_file.touch()
-        test_file.unlink()
-        os.environ["OPENHARNESS_CONFIG_DIR"] = str(project_config)
-    except OSError:
-        # Fall back to default (~/.openharness)
-        pass
 
 
 def main():

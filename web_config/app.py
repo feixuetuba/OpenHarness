@@ -7,16 +7,20 @@ including providers, models, authentication, permissions, and more.
 from __future__ import annotations
 
 import json
+import re
+import shutil
 import sys
+import zipfile
+from dataclasses import asdict, is_dataclass
+from io import BytesIO
 from pathlib import Path
 from typing import Any
 
-# Add src directory to path for imports
 src_path = Path(__file__).parent.parent / "src"
-if str(src_path) not in sys.path:
+if src_path.exists() and str(src_path) not in sys.path:
     sys.path.insert(0, str(src_path))
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
@@ -54,47 +58,124 @@ def _get_settings_obj():
     return load_settings()
 
 
-AGENTS_FILE = Path(__file__).parent.parent / "src" / "openharness" / "config" / "agents.json"
+def _get_agents_file() -> Path:
+    """Return the persisted web-config agent list path."""
+    from openharness.config.paths import get_config_dir
+
+    return get_config_dir() / "agents.json"
 
 
-def _load_agents() -> list[dict[str, Any]]:
-    """Load agent configurations from agents.json."""
-    if AGENTS_FILE.exists():
-        data = json.loads(AGENTS_FILE.read_text())
-        return data.get("agents", [])
-    return []
+def _load_agents_payload() -> dict[str, Any]:
+    path = _get_agents_file()
+    if not path.exists():
+        return {"agents": [], "active_agent_id": None}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {"agents": [], "active_agent_id": None}
+    agents = data.get("agents", [])
+    if not isinstance(agents, list):
+        agents = []
+    active_agent_id = data.get("active_agent_id")
+    return {"agents": agents, "active_agent_id": active_agent_id}
 
 
-def _save_agents(agents: list[dict[str, Any]]) -> None:
-    """Save agent configurations to agents.json."""
-    content = json.dumps({"agents": agents}, indent=2, ensure_ascii=False)
-    AGENTS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    AGENTS_FILE.write_text(content)
+def _save_agents_payload(payload: dict[str, Any]) -> None:
+    from openharness.utils.fs import atomic_write_text
+
+    path = _get_agents_file()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write_text(path, json.dumps(payload, indent=2, ensure_ascii=False))
 
 
-def _load_active_agent_id() -> str | None:
-    """Load the active agent ID."""
-    if AGENTS_FILE.exists():
-        data = json.loads(AGENTS_FILE.read_text())
-        return data.get("active_agent_id")
-    return None
+def _skill_to_dict(skill) -> dict[str, Any]:
+    return {
+        "name": skill.name,
+        "description": skill.description,
+        "source": skill.source,
+        "path": skill.path,
+        "content": skill.content,
+    }
 
 
-def _save_active_agent_id(agent_id: str | None) -> None:
-    """Save the active agent ID."""
-    agents = _load_agents()
-    content = json.dumps({"agents": agents, "active_agent_id": agent_id}, indent=2, ensure_ascii=False)
-    AGENTS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    AGENTS_FILE.write_text(content)
+def _model_dump(value: Any) -> dict[str, Any]:
+    if hasattr(value, "model_dump"):
+        return value.model_dump(mode="json")
+    if hasattr(value, "dict"):
+        return value.dict()
+    if is_dataclass(value):
+        return _jsonable(asdict(value))
+    return dict(value or {})
 
 
-def _get_agent_by_id(agent_id: str) -> dict[str, Any] | None:
-    """Get an agent config by ID."""
-    agents = _load_agents()
-    for agent in agents:
-        if agent.get("id") == agent_id:
-            return agent
-    return None
+def _jsonable(value: Any) -> Any:
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, dict):
+        return {str(key): _jsonable(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_jsonable(item) for item in value]
+    if isinstance(value, tuple):
+        return [_jsonable(item) for item in value]
+    return value
+
+
+def _update_settings_section(section: str, values: dict[str, Any]) -> None:
+    data = _load_settings()
+    current = data.get(section, {})
+    if not isinstance(current, dict):
+        current = {}
+    current.update(values)
+    data[section] = current
+    _save_settings(data)
+
+
+def _safe_slug(value: str, default: str = "skill") -> str:
+    slug = re.sub(r"[^A-Za-z0-9_.-]+", "-", value.strip()).strip(".-")
+    return slug or default
+
+
+async def _read_multipart_file(request: Request) -> tuple[str, bytes]:
+    """Read one uploaded file from multipart/form-data without extra dependencies."""
+    from email import policy
+    from email.parser import BytesParser
+
+    content_type = request.headers.get("content-type", "")
+    if "multipart/form-data" not in content_type:
+        raise HTTPException(status_code=400, detail="Expected multipart/form-data upload")
+
+    body = await request.body()
+    message = BytesParser(policy=policy.default).parsebytes(
+        f"Content-Type: {content_type}\r\nMIME-Version: 1.0\r\n\r\n".encode("utf-8") + body
+    )
+    for part in message.iter_parts():
+        if part.get_content_disposition() != "form-data":
+            continue
+        if part.get_param("name", header="content-disposition") != "file":
+            continue
+        filename = part.get_filename() or "skill.zip"
+        return filename, part.get_payload(decode=True) or b""
+    raise HTTPException(status_code=400, detail="No uploaded file field named 'file'")
+
+
+def _validate_zip_members(zf: zipfile.ZipFile) -> list[zipfile.ZipInfo]:
+    members: list[zipfile.ZipInfo] = []
+    for member in zf.infolist():
+        path = Path(member.filename)
+        if path.is_absolute() or ".." in path.parts:
+            raise HTTPException(status_code=400, detail=f"Unsafe zip path: {member.filename}")
+        if member.is_dir() or member.filename.startswith("__MACOSX/"):
+            continue
+        members.append(member)
+    if not any(Path(member.filename).name == "SKILL.md" for member in members):
+        raise HTTPException(status_code=400, detail="ZIP must contain a SKILL.md file")
+    return members
+
+
+def _zip_skill_root(members: list[zipfile.ZipInfo]) -> Path:
+    skill_paths = [Path(member.filename) for member in members if Path(member.filename).name == "SKILL.md"]
+    root = skill_paths[0].parent
+    return Path(".") if str(root) == "." else root
 
 
 # ---------------------------------------------------------------------------
@@ -130,11 +211,6 @@ class AgentConfig(BaseModel):
     system_prompt: str = ""
     model: str | None = None
     max_turns: int | None = None
-
-
-class AgentsUpdate(BaseModel):
-    agents: list[AgentConfig]
-    active_agent_id: str | None = None
 
 
 @app.get("/")
@@ -182,8 +258,6 @@ async def get_settings():
         "memory_enabled": settings.memory.enabled,
         "memory_max_files": settings.memory.max_files,
         "sandbox_enabled": settings.sandbox.enabled,
-        "agents": _load_agents(),
-        "active_agent_id": _load_active_agent_id(),
     }
 
 
@@ -361,6 +435,567 @@ async def auth_status():
     return statuses
 
 
+@app.get("/api/agents")
+async def get_agents():
+    """Get all web-config agent presets."""
+    return _load_agents_payload()
+
+
+@app.post("/api/agents")
+async def create_agent(agent: AgentConfig):
+    """Create a web-config agent preset."""
+    payload = _load_agents_payload()
+    agents = payload["agents"]
+    if any(existing.get("id") == agent.id for existing in agents):
+        raise HTTPException(status_code=400, detail=f"Agent with ID '{agent.id}' already exists")
+
+    agent_data = agent.model_dump()
+    agents.append(agent_data)
+    if not payload.get("active_agent_id"):
+        payload["active_agent_id"] = agent.id
+    _save_agents_payload(payload)
+    return {"status": "ok", "agent": agent_data}
+
+
+@app.put("/api/agents/{agent_id}")
+async def update_agent(agent_id: str, agent: AgentConfig):
+    """Update a web-config agent preset."""
+    payload = _load_agents_payload()
+    agents = payload["agents"]
+    for index, existing in enumerate(agents):
+        if existing.get("id") == agent_id:
+            agents[index] = agent.model_dump()
+            if payload.get("active_agent_id") == agent_id:
+                payload["active_agent_id"] = agent.id
+            _save_agents_payload(payload)
+            return {"status": "ok", "agent": agents[index]}
+    raise HTTPException(status_code=404, detail=f"Agent not found: {agent_id}")
+
+
+@app.delete("/api/agents/{agent_id}")
+async def delete_agent(agent_id: str):
+    """Delete a web-config agent preset."""
+    payload = _load_agents_payload()
+    agents = payload["agents"]
+    remaining = [agent for agent in agents if agent.get("id") != agent_id]
+    if len(remaining) == len(agents):
+        raise HTTPException(status_code=404, detail=f"Agent not found: {agent_id}")
+    payload["agents"] = remaining
+    if payload.get("active_agent_id") == agent_id:
+        payload["active_agent_id"] = remaining[0].get("id") if remaining else None
+    _save_agents_payload(payload)
+    return {"status": "ok"}
+
+
+@app.post("/api/agents/{agent_id}/activate")
+async def activate_agent(agent_id: str):
+    """Activate a web-config agent preset."""
+    payload = _load_agents_payload()
+    if not any(agent.get("id") == agent_id for agent in payload["agents"]):
+        raise HTTPException(status_code=404, detail=f"Agent not found: {agent_id}")
+    payload["active_agent_id"] = agent_id
+    _save_agents_payload(payload)
+    return {"status": "ok", "active_agent_id": agent_id}
+
+
+@app.get("/api/skills")
+async def list_skills():
+    """List available skills."""
+    from openharness.skills import load_skill_registry
+
+    registry = load_skill_registry(Path.cwd())
+    return [_skill_to_dict(skill) for skill in registry.list_skills()]
+
+
+@app.get("/api/skills/{skill_name}")
+async def get_skill(skill_name: str):
+    """Get one skill's details."""
+    from openharness.skills import load_skill_registry
+
+    skill = load_skill_registry(Path.cwd()).get(skill_name)
+    if skill is None:
+        raise HTTPException(status_code=404, detail=f"Skill not found: {skill_name}")
+    return _skill_to_dict(skill)
+
+
+@app.post("/api/skills/reload")
+async def reload_skills():
+    """Reload skills by rebuilding the registry."""
+    from openharness.skills import load_skill_registry
+
+    skills = load_skill_registry(Path.cwd()).list_skills()
+    return {"status": "ok", "count": len(skills)}
+
+
+@app.post("/api/skills/install")
+async def install_skill(data: dict):
+    """Return a clear response for web installs that require a CLI-capable workflow."""
+    url = str(data.get("url", "")).strip()
+    if not url:
+        raise HTTPException(status_code=400, detail="Skill URL is required")
+    raise HTTPException(
+        status_code=501,
+        detail="Skill installation from URL is not implemented in the web config server yet.",
+    )
+
+
+@app.post("/api/skills/upload-zip")
+async def upload_skill_zip(request: Request):
+    """Install a user skill from an uploaded ZIP archive."""
+    from openharness.skills.loader import get_user_skills_dir, load_skills_from_dirs
+
+    filename, content = await _read_multipart_file(request)
+    if not filename.lower().endswith(".zip"):
+        raise HTTPException(status_code=400, detail="Uploaded file must be a ZIP archive")
+    if not content:
+        raise HTTPException(status_code=400, detail="Uploaded ZIP is empty")
+
+    try:
+        zf = zipfile.ZipFile(BytesIO(content))
+    except zipfile.BadZipFile:
+        raise HTTPException(status_code=400, detail="Uploaded file is not a valid ZIP archive")
+
+    with zf:
+        members = _validate_zip_members(zf)
+        source_root = _zip_skill_root(members)
+        skill_name = _safe_slug(source_root.name if str(source_root) != "." else Path(filename).stem)
+        target_dir = get_user_skills_dir() / skill_name
+        if target_dir.exists():
+            raise HTTPException(status_code=409, detail=f"Skill already exists: {skill_name}")
+
+        target_dir.mkdir(parents=True, exist_ok=False)
+        try:
+            for member in members:
+                member_path = Path(member.filename)
+                if source_root != Path("."):
+                    try:
+                        relative_path = member_path.relative_to(source_root)
+                    except ValueError:
+                        continue
+                else:
+                    relative_path = member_path
+                if str(relative_path) == ".":
+                    continue
+                destination = target_dir / relative_path
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.write_bytes(zf.read(member))
+        except Exception:
+            shutil.rmtree(target_dir, ignore_errors=True)
+            raise
+
+    installed = [
+        skill
+        for skill in load_skills_from_dirs([target_dir.parent], source="user", create_missing=False)
+        if Path(skill.base_dir or "").resolve() == target_dir.resolve()
+    ]
+    if not installed:
+        shutil.rmtree(target_dir, ignore_errors=True)
+        raise HTTPException(status_code=400, detail="ZIP did not install a loadable skill")
+
+    skill = installed[0]
+    return {
+        "status": "ok",
+        "message": f"Installed skill: {skill.name}",
+        "skill": _skill_to_dict(skill),
+    }
+
+
+@app.delete("/api/skills/{skill_name}")
+async def delete_skill(skill_name: str):
+    """Delete a user skill."""
+    from openharness.skills import load_skill_registry
+    from openharness.skills.loader import get_user_skill_dirs
+
+    skill = load_skill_registry(Path.cwd()).get(skill_name)
+    if skill is None:
+        raise HTTPException(status_code=404, detail=f"Skill not found: {skill_name}")
+    if skill.source != "user" or not skill.path:
+        raise HTTPException(status_code=400, detail="Only user skills can be deleted")
+
+    target = Path(skill.path).expanduser().resolve()
+    allowed_roots = [path.expanduser().resolve() for path in get_user_skill_dirs()]
+    if not any(target == root or root in target.parents for root in allowed_roots):
+        raise HTTPException(status_code=400, detail="Refusing to delete a skill outside user skill dirs")
+    if target.is_dir():
+        shutil.rmtree(target)
+    elif target.exists():
+        target.unlink()
+    return {"status": "ok", "message": f"Deleted skill: {skill_name}"}
+
+
+@app.get("/api/skills/{skill_name}/download")
+async def download_skill(skill_name: str):
+    """Download a skill as a zip file."""
+    from openharness.skills import load_skill_registry
+
+    skill = load_skill_registry(Path.cwd()).get(skill_name)
+    if skill is None:
+        raise HTTPException(status_code=404, detail=f"Skill not found: {skill_name}")
+
+    buffer = BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+        if skill.path and Path(skill.path).exists():
+            source = Path(skill.path)
+            if source.is_dir():
+                for item in source.rglob("*"):
+                    if item.is_file():
+                        archive.write(item, item.relative_to(source.parent))
+            else:
+                archive.write(source, source.name)
+        else:
+            archive.writestr("SKILL.md", skill.content)
+    buffer.seek(0)
+    headers = {"Content-Disposition": f'attachment; filename="{skill.name}.zip"'}
+    return StreamingResponse(buffer, media_type="application/zip", headers=headers)
+
+
+@app.get("/api/sessions")
+async def list_sessions():
+    """List saved sessions for the server working directory."""
+    from openharness.services import session_storage
+
+    return session_storage.list_session_snapshots(Path.cwd(), limit=50)
+
+
+@app.get("/api/sessions/{session_id}")
+async def get_session(session_id: str):
+    """Get a saved session."""
+    from openharness.services import session_storage
+
+    session = session_storage.load_session_by_id(Path.cwd(), session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail=f"Session not found: {session_id}")
+    return session
+
+
+@app.delete("/api/sessions/{session_id}")
+async def delete_session(session_id: str):
+    """Delete a saved session."""
+    from openharness.services import session_storage
+
+    session_dir = session_storage.get_project_session_dir(Path.cwd())
+    deleted = False
+    session_path = session_dir / f"session-{session_id}.json"
+    if session_path.exists():
+        session_path.unlink()
+        deleted = True
+
+    latest_path = session_dir / "latest.json"
+    if latest_path.exists():
+        try:
+            latest = json.loads(latest_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            latest = {}
+        if session_id == "latest" or latest.get("session_id") == session_id:
+            latest_path.unlink()
+            deleted = True
+
+    if not deleted:
+        raise HTTPException(status_code=404, detail=f"Session not found: {session_id}")
+    return {"status": "ok"}
+
+
+@app.get("/api/sessions/{session_id}/user-messages")
+async def list_session_user_messages(session_id: str):
+    """List user messages in a saved session."""
+    from openharness.services.session_storage import list_user_messages_in_session
+
+    return {"user_messages": list_user_messages_in_session(Path.cwd(), session_id)}
+
+
+@app.post("/api/sessions/{session_id}/fork")
+async def fork_session(session_id: str, data: dict):
+    """Fork a saved session at a user-selected message index."""
+    from openharness.services.session_storage import fork_session_from_message
+
+    message_index = data.get("message_index")
+    if message_index is None:
+        raise HTTPException(status_code=400, detail="message_index is required")
+    result = fork_session_from_message(
+        cwd=Path.cwd(),
+        source_session_id=session_id,
+        fork_at_message_index=int(message_index),
+        new_session_id=data.get("new_session_id") or None,
+    )
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"Session not found: {session_id}")
+    forked_session_id = (data.get("new_session_id") or result.stem.replace("session-", ""))
+    return {
+        "status": "ok",
+        "forked_session_id": forked_session_id,
+        "source_session_id": session_id,
+        "forked_at_index": int(message_index),
+    }
+
+
+@app.get("/api/social-platforms")
+async def get_social_platforms():
+    """Get social platform settings."""
+    return _model_dump(_get_settings_obj().social_platforms)
+
+
+@app.put("/api/social-platforms")
+async def update_social_platforms(data: dict):
+    """Update social platform settings."""
+    _update_settings_section("social_platforms", data)
+    return {"status": "ok"}
+
+
+@app.get("/api/skill-management")
+async def get_skill_management():
+    """Get skill management settings."""
+    return _model_dump(_get_settings_obj().skill_management)
+
+
+@app.put("/api/skill-management")
+async def update_skill_management(data: dict):
+    """Update skill management settings."""
+    _update_settings_section("skill_management", data)
+    return {"status": "ok"}
+
+
+@app.get("/api/memory-settings")
+async def get_memory_settings():
+    """Get memory settings."""
+    return _model_dump(_get_settings_obj().memory)
+
+
+@app.put("/api/memory-settings")
+async def update_memory_settings(data: dict):
+    """Update memory settings."""
+    _update_settings_section("memory", data)
+    return {"status": "ok"}
+
+
+@app.get("/api/memory/entries")
+async def list_memory_entries():
+    """List memory entries."""
+    try:
+        from openharness.memory import scan_memory_files
+
+        return [
+            {
+                "id": header.id,
+                "title": header.title,
+                "description": header.description,
+                "type": header.memory_type,
+                "path": str(header.path),
+                "modified_at": header.modified_at,
+                "importance": header.importance,
+            }
+            for header in scan_memory_files(Path.cwd(), max_files=200)
+        ]
+    except Exception as exc:
+        return {"error": str(exc), "entries": []}
+
+
+@app.post("/api/memory/entries")
+async def add_memory_entry(entry_data: dict):
+    """Add a memory entry."""
+    try:
+        from openharness.memory import add_memory_entry
+
+        title = str(entry_data.get("title") or entry_data.get("name") or "").strip()
+        if not title:
+            raise HTTPException(status_code=400, detail="Memory entry title is required")
+        path = add_memory_entry(Path.cwd(), title, str(entry_data.get("content", "")))
+        return {"status": "ok", "path": str(path)}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.delete("/api/memory/entries/{entry_name}")
+async def delete_memory_entry(entry_name: str):
+    """Delete a memory entry."""
+    try:
+        from openharness.memory import remove_memory_entry
+
+        if not remove_memory_entry(Path.cwd(), entry_name):
+            raise HTTPException(status_code=404, detail=f"Memory entry not found: {entry_name}")
+        return {"status": "ok"}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.get("/api/memory/md")
+async def get_memory_md():
+    """Get MEMORY.md content."""
+    from openharness.memory.paths import get_memory_entrypoint
+
+    entrypoint = get_memory_entrypoint(Path.cwd())
+    return {"content": entrypoint.read_text(encoding="utf-8") if entrypoint.exists() else ""}
+
+
+@app.post("/api/memory/md")
+async def update_memory_md(data: dict):
+    """Update MEMORY.md content."""
+    from openharness.memory.paths import get_memory_entrypoint
+    from openharness.utils.fs import atomic_write_text
+
+    atomic_write_text(get_memory_entrypoint(Path.cwd()), str(data.get("content", "")))
+    return {"status": "ok"}
+
+
+@app.get("/api/plugins")
+async def list_plugins():
+    """List project plugins."""
+    from openharness.plugins.loader import load_plugins
+
+    plugins = []
+    for plugin in load_plugins(_get_settings_obj(), Path.cwd()):
+        plugins.append({
+            "name": plugin.name,
+            "version": plugin.version,
+            "description": plugin.description,
+            "enabled": plugin.enabled,
+        })
+    return plugins
+
+
+@app.post("/api/plugins/install")
+async def install_plugin(data: dict):
+    """Return a clear response for plugin installs that are not wired yet."""
+    if not str(data.get("path", "")).strip():
+        raise HTTPException(status_code=400, detail="Plugin path is required")
+    raise HTTPException(status_code=501, detail="Plugin installation is not implemented in the web config server yet.")
+
+
+@app.post("/api/plugins/{plugin_name}/toggle")
+async def toggle_plugin(plugin_name: str):
+    """Toggle a plugin enablement flag."""
+    data = _load_settings()
+    enabled = data.setdefault("enabled_plugins", {})
+    if not isinstance(enabled, dict):
+        enabled = {}
+        data["enabled_plugins"] = enabled
+    enabled[plugin_name] = not bool(enabled.get(plugin_name, True))
+    _save_settings(data)
+    return {"status": "ok", "enabled": enabled[plugin_name]}
+
+
+@app.delete("/api/plugins/{plugin_name}")
+async def uninstall_plugin(plugin_name: str):
+    """Return a clear response for plugin uninstall."""
+    raise HTTPException(status_code=501, detail="Plugin uninstall is not implemented in the web config server yet.")
+
+
+def _mcp_servers_list() -> list[dict[str, Any]]:
+    settings = _get_settings_obj()
+    servers = []
+    raw_enabled = _load_settings().get("enabled_mcp_servers", {})
+    enabled_flags = raw_enabled if isinstance(raw_enabled, dict) else {}
+    for name, config in settings.mcp_servers.items():
+        payload = _model_dump(config)
+        payload["name"] = name
+        payload["enabled"] = bool(enabled_flags.get(name, True))
+        servers.append(payload)
+    return servers
+
+
+@app.get("/api/mcp/servers")
+async def list_mcp_servers_alias():
+    """List configured MCP servers."""
+    return _mcp_servers_list()
+
+
+@app.post("/api/mcp/servers")
+async def add_mcp_server(server_data: dict):
+    """Add an MCP server entry."""
+    name = str(server_data.get("name", "")).strip()
+    command = str(server_data.get("command", "")).strip()
+    if not name or not command:
+        raise HTTPException(status_code=400, detail="name and command are required")
+    data = _load_settings()
+    mcp_servers = data.setdefault("mcp_servers", {})
+    if not isinstance(mcp_servers, dict):
+        mcp_servers = {}
+        data["mcp_servers"] = mcp_servers
+    mcp_servers[name] = {
+        "type": "stdio",
+        "command": command,
+        "args": server_data.get("args") or [],
+    }
+    _save_settings(data)
+    return {"status": "ok", "name": name}
+
+
+@app.post("/api/mcp/servers/{server_name}/toggle")
+async def toggle_mcp_server(server_name: str):
+    """Toggle an MCP server enablement flag."""
+    data = _load_settings()
+    enabled = data.setdefault("enabled_mcp_servers", {})
+    if not isinstance(enabled, dict):
+        enabled = {}
+        data["enabled_mcp_servers"] = enabled
+    enabled[server_name] = not bool(enabled.get(server_name, True))
+    _save_settings(data)
+    return {"status": "ok", "enabled": enabled[server_name]}
+
+
+@app.delete("/api/mcp/servers/{server_name}")
+async def delete_mcp_server(server_name: str):
+    """Delete an MCP server entry."""
+    data = _load_settings()
+    mcp_servers = data.get("mcp_servers", {})
+    if not isinstance(mcp_servers, dict) or server_name not in mcp_servers:
+        raise HTTPException(status_code=404, detail=f"MCP server not found: {server_name}")
+    del mcp_servers[server_name]
+    _save_settings(data)
+    return {"status": "ok"}
+
+
+@app.get("/api/tasks")
+async def list_tasks():
+    """List background tasks."""
+    try:
+        from openharness.tasks import get_task_manager
+
+        return [
+            _model_dump(task)
+            for task in get_task_manager().list_tasks()
+        ]
+    except Exception as exc:
+        return {"error": str(exc), "tasks": []}
+
+
+@app.post("/api/test-connection")
+async def test_connection(req: dict):
+    """Test a model server by requesting its model list."""
+    import httpx
+
+    base_url = str(req.get("base_url", "")).strip().rstrip("/")
+    if not base_url:
+        return {"success": False, "message": "base_url is required", "models": []}
+    api_key = str(req.get("api_key") or "sk-placeholder")
+    api_format = str(req.get("api_format") or "openai").lower()
+    url = f"{base_url}/models" if base_url.endswith("/v1") else f"{base_url}/v1/models"
+    headers = {"Content-Type": "application/json"}
+    if api_format == "anthropic":
+        headers["x-api-key"] = api_key
+    else:
+        headers["Authorization"] = f"Bearer {api_key}"
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get(url, headers=headers)
+            response.raise_for_status()
+            payload = response.json()
+        raw_models = payload.get("data") or payload.get("models") or []
+        models = [item.get("id") or item.get("name") for item in raw_models if isinstance(item, dict)]
+        return {"success": True, "message": "Connection successful", "models": [m for m in models if m]}
+    except Exception as exc:
+        return {"success": False, "message": str(exc), "models": []}
+
+
+@app.post("/api/chat/agent")
+async def chat_with_agent():
+    """Return a clear response for chat when the web agent loop is not wired."""
+    raise HTTPException(status_code=501, detail="Web agent chat is not implemented in this server build yet.")
+
+
 @app.get("/api/mcp-servers")
 async def get_mcp_servers():
     """Get configured MCP servers."""
@@ -374,1327 +1009,3 @@ async def get_mcp_servers():
             "url": getattr(config, "url", ""),
         })
     return servers
-
-
-# Social Platforms
-@app.get("/api/social-platforms")
-async def get_social_platforms():
-    """Get social platform configuration."""
-    settings = _get_settings_obj()
-    return settings.social_platforms.dict()
-
-
-@app.put("/api/social-platforms")
-async def update_social_platforms(data: dict):
-    """Update social platform configuration."""
-    settings = _get_settings_obj()
-    settings.social_platforms = settings.social_platforms.model_copy(update=data)
-    _save_settings_obj(settings)
-    return {"status": "ok"}
-
-
-# Agent Management
-@app.get("/api/agents")
-async def get_agents():
-    """Get all agent configurations."""
-    agents = _load_agents()
-    active_agent_id = _load_active_agent_id()
-    return {
-        "agents": agents,
-        "active_agent_id": active_agent_id,
-    }
-
-
-@app.post("/api/agents")
-async def create_agent(agent: AgentConfig):
-    """Create a new agent configuration."""
-    agents = _load_agents()
-    
-    for existing in agents:
-        if existing.get("id") == agent.id:
-            raise HTTPException(status_code=400, detail=f"Agent with ID '{agent.id}' already exists")
-    
-    agent_data = agent.model_dump()
-    agents.append(agent_data)
-    _save_agents(agents)
-    
-    if not _load_active_agent_id():
-        _save_active_agent_id(agent.id)
-    
-    return {"status": "ok", "agent": agent_data}
-
-
-@app.put("/api/agents/{agent_id}")
-async def update_agent(agent_id: str, agent: AgentConfig):
-    """Update an agent configuration."""
-    agents = _load_agents()
-    
-    for i, existing in enumerate(agents):
-        if existing.get("id") == agent_id:
-            agents[i] = agent.model_dump()
-            _save_agents(agents)
-            return {"status": "ok", "agent": agent.model_dump()}
-    
-    raise HTTPException(status_code=404, detail=f"Agent not found: {agent_id}")
-
-
-@app.delete("/api/agents/{agent_id}")
-async def delete_agent(agent_id: str):
-    """Delete an agent configuration."""
-    agents = _load_agents()
-    new_agents = [a for a in agents if a.get("id") != agent_id]
-    
-    if len(new_agents) == len(agents):
-        raise HTTPException(status_code=404, detail=f"Agent not found: {agent_id}")
-    
-    _save_agents(new_agents)
-    
-    active_agent_id = _load_active_agent_id()
-    if active_agent_id == agent_id:
-        new_active = new_agents[0]["id"] if new_agents else None
-        _save_active_agent_id(new_active)
-    
-    return {"status": "ok"}
-
-
-@app.post("/api/agents/{agent_id}/activate")
-async def activate_agent(agent_id: str):
-    """Activate an agent configuration."""
-    agent = _get_agent_by_id(agent_id)
-    if not agent:
-        raise HTTPException(status_code=404, detail=f"Agent not found: {agent_id}")
-    
-    _save_active_agent_id(agent_id)
-    return {"status": "ok", "active_agent_id": agent_id}
-
-
-@app.put("/api/agents/batch")
-async def update_agents_batch(update: AgentsUpdate):
-    """Batch update all agents and set active agent."""
-    agents = [agent.model_dump() for agent in update.agents]
-    _save_agents(agents)
-    _save_active_agent_id(update.active_agent_id)
-    return {"status": "ok"}
-
-
-# Search API
-@app.get("/api/search-api")
-async def get_search_api():
-    """Get search API configuration."""
-    settings = _get_settings_obj()
-    return settings.search_api.dict()
-
-
-@app.put("/api/search-api")
-async def update_search_api(data: dict):
-    """Update search API configuration."""
-    settings = _get_settings_obj()
-    settings.search_api = settings.search_api.model_copy(update=data)
-    _save_settings_obj(settings)
-    return {"status": "ok"}
-
-
-# Skill Management
-@app.get("/api/skill-management")
-async def get_skill_management():
-    """Get skill management configuration."""
-    settings = _get_settings_obj()
-    return settings.skill_management.dict()
-
-
-@app.put("/api/skill-management")
-async def update_skill_management(data: dict):
-    """Update skill management configuration."""
-    settings = _get_settings_obj()
-    settings.skill_management = settings.skill_management.model_copy(update=data)
-    _save_settings_obj(settings)
-    return {"status": "ok"}
-
-
-# Session Management
-@app.get("/api/session-management")
-async def get_session_management():
-    """Get session management configuration."""
-    settings = _get_settings_obj()
-    return settings.session_management.dict()
-
-
-@app.put("/api/session-management")
-async def update_session_management(data: dict):
-    """Update session management configuration."""
-    settings = _get_settings_obj()
-    settings.session_management = settings.session_management.model_copy(update=data)
-    _save_settings_obj(settings)
-    return {"status": "ok"}
-
-
-# Memory Settings
-@app.get("/api/memory-settings")
-async def get_memory_settings():
-    """Get memory settings configuration."""
-    settings = _get_settings_obj()
-    return settings.memory.dict()
-
-
-@app.put("/api/memory-settings")
-async def update_memory_settings(data: dict):
-    """Update memory settings configuration."""
-    settings = _get_settings_obj()
-    settings.memory = settings.memory.model_copy(update=data)
-    _save_settings_obj(settings)
-    return {"status": "ok"}
-
-
-class TestConnectionRequest(BaseModel):
-    base_url: str
-    api_format: str = "openai"
-    api_key: str | None = None
-
-
-@app.post("/api/test-connection")
-async def test_connection(req: TestConnectionRequest):
-    """Test connection to a model server and fetch available models."""
-    import httpx
-
-    base_url = req.base_url.strip().rstrip("/")
-    api_format = req.api_format.lower()
-    api_key = req.api_key or "sk-placeholder"
-
-    try:
-        if api_format == "openai":
-            # OpenAI-compatible API
-            # Handle both cases: base_url with or without /v1
-            if base_url.endswith("/v1"):
-                url = f"{base_url}/models"
-            else:
-                url = f"{base_url}/v1/models"
-            headers = {
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json"
-            }
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                response = await client.get(url, headers=headers)
-                response.raise_for_status()
-                data = response.json()
-                
-                if "data" in data:
-                    models = [m["id"] for m in data["data"]]
-                elif "models" in data:
-                    models = [m["id"] for m in data["models"]]
-                else:
-                    models = []
-                
-                return {
-                    "success": True,
-                    "message": "Connection successful",
-                    "models": models,
-                    "api_format": "openai"
-                }
-        
-        elif api_format == "anthropic":
-            # Anthropic-compatible API
-            url = f"{base_url}/v1/models"
-            headers = {
-                "x-api-key": api_key,
-                "Content-Type": "application/json"
-            }
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                response = await client.get(url, headers=headers)
-                response.raise_for_status()
-                data = response.json()
-                
-                if "models" in data:
-                    models = [m["name"] for m in data["models"]]
-                else:
-                    models = []
-                
-                return {
-                    "success": True,
-                    "message": "Connection successful",
-                    "models": models,
-                    "api_format": "anthropic"
-                }
-        
-        else:
-            return {"success": False, "message": f"Unsupported API format: {api_format}"}
-    
-    except httpx.HTTPError as e:
-        return {"success": False, "message": f"HTTP error: {str(e)}"}
-    except Exception as e:
-        return {"success": False, "message": f"Error: {str(e)}"}
-
-
-# ---------------------------------------------------------------------------
-# Agent Loop Chat API
-# ---------------------------------------------------------------------------
-
-class ChatMessage(BaseModel):
-    message: str
-    session_id: str | None = None
-    agent_id: str | None = None
-
-
-@app.post("/api/chat/agent")
-async def chat_with_agent(req: ChatMessage):
-    """Chat endpoint with full Agent Loop (Tools + Skills + Sessions)."""
-    from openharness.config import load_settings
-    from openharness.api.client import AnthropicApiClient
-    from openharness.api.openai_client import OpenAICompatibleClient
-    from openharness.tools import create_default_tool_registry
-    from openharness.permissions.checker import PermissionChecker
-    from openharness.engine.query_engine import QueryEngine
-    from openharness.engine.messages import ConversationMessage
-    from openharness.engine.stream_events import (
-        AssistantTextDelta,
-        ToolExecutionStarted,
-        ToolExecutionCompleted,
-        AssistantTurnComplete,
-    )
-    from openharness.services.session_backend import OpenHarnessSessionBackend
-    from openharness.skills import load_skill_registry
-    from openharness.mcp.client import McpClientManager
-
-    settings = load_settings().materialize_active_profile()
-    
-    try:
-        auth = settings.resolve_auth()
-        api_key = auth.value
-    except Exception:
-        api_key = ""
-
-    if not api_key:
-        return StreamingResponse(
-            iter([f"event: error\ndata: {json.dumps({'message': 'API key not configured'})}\n\n"]),
-            media_type="text/event-stream",
-        )
-
-    base_url = settings.base_url or ""
-    model = settings.model or "gpt-4"
-    api_format = settings.api_format or "openai"
-
-    active_agent_id = req.agent_id or _load_active_agent_id()
-    agent_config = _get_agent_by_id(active_agent_id) if active_agent_id else None
-    system_prompt = agent_config.get("system_prompt") if agent_config else None
-    if agent_config and agent_config.get("model"):
-        model = agent_config["model"]
-
-    session_id = req.session_id or "default"
-    cwd = Path.cwd()
-
-    async def agent_stream():
-        try:
-            if api_format in ("openai", "openai_compat"):
-                api_client = OpenAICompatibleClient(
-                    api_key=api_key,
-                    base_url=base_url,
-                    timeout=settings.timeout,
-                )
-            else:
-                api_client = AnthropicApiClient(
-                    api_key=api_key,
-                    base_url=base_url,
-                )
-
-            mcp_manager = McpClientManager(settings.mcp_servers)
-            await mcp_manager.connect_all()
-
-            tool_registry = create_default_tool_registry(mcp_manager)
-
-            skill_registry = load_skill_registry()
-
-            permission_checker = PermissionChecker(settings.permission)
-
-            engine = QueryEngine(
-                api_client=api_client,
-                tool_registry=tool_registry,
-                permission_checker=permission_checker,
-                cwd=cwd,
-                model=model,
-                system_prompt=system_prompt or "",
-                settings=settings,
-                tool_metadata={
-                    "session_id": session_id,
-                    "skill_registry": skill_registry,
-                },
-            )
-
-            session_backend = OpenHarnessSessionBackend()
-            if session_id != "default":
-                snapshot = session_backend.load_by_id(cwd, session_id)
-                if snapshot and snapshot.get("messages"):
-                    from openharness.engine.messages import sanitize_conversation_messages
-                    restored = sanitize_conversation_messages(
-                        [ConversationMessage.model_validate(m) for m in snapshot["messages"]]
-                    )
-                    engine.load_messages(restored)
-
-            user_message = ConversationMessage.from_user_text(req.message)
-            
-            async for event in engine.submit_message(user_message):
-                if isinstance(event, AssistantTextDelta):
-                    yield f"event: text\ndata: {json.dumps({'text': event.text})}\n\n"
-                elif isinstance(event, ToolExecutionStarted):
-                    tool_data = {
-                        'tool': event.tool_name,
-                        'input': event.tool_input if hasattr(event, 'tool_input') else {},
-                    }
-                    yield f"event: tool_start\ndata: {json.dumps(tool_data)}\n\n"
-                elif isinstance(event, ToolExecutionCompleted):
-                    tool_data = {
-                        'tool': event.tool_name,
-                        'output': str(event.output) if hasattr(event, 'output') else "",
-                    }
-                    yield f"event: tool_complete\ndata: {json.dumps(tool_data)}\n\n"
-                elif isinstance(event, AssistantTurnComplete):
-                    yield f"event: done\ndata: {json.dumps({})}\n\n"
-
-            if settings.memory.session_memory_enabled:
-                session_backend.save_snapshot(
-                    cwd=cwd,
-                    model=model,
-                    system_prompt=system_prompt or "",
-                    messages=engine.messages,
-                    usage=engine.total_usage,
-                    session_id=session_id,
-                )
-
-            await mcp_manager.close()
-
-        except Exception as e:
-            yield f"event: error\ndata: {json.dumps({'message': str(e)})}\n\n"
-
-    return StreamingResponse(
-        agent_stream(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",
-        },
-    )
-
-
-# ---------------------------------------------------------------------------
-# Tools API
-# ---------------------------------------------------------------------------
-
-@app.get("/api/tools")
-async def list_tools():
-    """List all available tools."""
-    from openharness.tools import create_default_tool_registry
-
-    registry = create_default_tool_registry()
-    tools = []
-    for tool in registry.list_tools():
-        tools.append({
-            "name": tool.name,
-            "description": tool.description,
-            "input_schema": tool.input_model.model_json_schema() if hasattr(tool, 'input_model') else {},
-        })
-    return tools
-
-
-@app.get("/api/tools/{tool_name}")
-async def get_tool(tool_name: str):
-    """Get tool details by name."""
-    from openharness.tools import create_default_tool_registry
-
-    registry = create_default_tool_registry()
-    tool = registry.get(tool_name)
-    if not tool:
-        raise HTTPException(status_code=404, detail=f"Tool not found: {tool_name}")
-    
-    return {
-        "name": tool.name,
-        "description": tool.description,
-        "input_schema": tool.input_model.model_json_schema() if hasattr(tool, 'input_model') else {},
-    }
-
-
-@app.get("/api/tools/schema")
-async def get_tools_schema():
-    """Get all tools schema for API usage."""
-    from openharness.tools import create_default_tool_registry
-
-    registry = create_default_tool_registry()
-    return registry.to_api_schema()
-
-
-# ---------------------------------------------------------------------------
-# Skills API
-# ---------------------------------------------------------------------------
-
-@app.get("/api/skills")
-async def list_skills():
-    """List all available skills."""
-    try:
-        from openharness.skills.bundled import get_bundled_skills
-        from openharness.skills.registry import SkillRegistry
-
-        registry = SkillRegistry()
-        for skill in get_bundled_skills():
-            registry.register(skill)
-        
-        try:
-            from openharness.skills import load_skill_registry
-            full_registry = load_skill_registry()
-            for skill in full_registry.list_skills():
-                if skill.name not in registry._skills:
-                    registry.register(skill)
-        except OSError:
-            pass
-        
-        skills = []
-        for skill in registry.list_skills():
-            skills.append({
-                "name": skill.name,
-                "description": skill.description,
-                "source": skill.source,
-                "path": str(skill.path) if hasattr(skill, 'path') and skill.path else "",
-                "user_invocable": skill.user_invocable,
-            })
-        return skills
-    except Exception as e:
-        return {"error": str(e), "skills": []}
-
-
-@app.get("/api/skills/{skill_name}")
-async def get_skill(skill_name: str):
-    """Get skill details by name."""
-    from openharness.skills import load_skill_registry
-
-    registry = load_skill_registry()
-    skill = registry.get(skill_name)
-    if not skill:
-        raise HTTPException(status_code=404, detail=f"Skill not found: {skill_name}")
-    
-    content = ""
-    if hasattr(skill, 'path') and skill.path:
-        try:
-            content = skill.path.read_text(encoding="utf-8")
-        except Exception:
-            pass
-    
-    return {
-        "name": skill.name,
-        "description": skill.description,
-        "source": skill.source,
-        "path": str(skill.path) if hasattr(skill, 'path') and skill.path else "",
-        "user_invocable": skill.user_invocable,
-        "content": content,
-    }
-
-
-@app.post("/api/skills/reload")
-async def reload_skills():
-    """Reload all skills from disk."""
-    from openharness.skills import load_skill_registry
-
-    registry = load_skill_registry()
-    skills = registry.list_skills()
-    return {
-        "status": "ok",
-        "message": f"Reloaded {len(skills)} skills",
-        "count": len(skills),
-    }
-
-
-# ---------------------------------------------------------------------------
-# Plugins API
-# ---------------------------------------------------------------------------
-
-@app.get("/api/plugins")
-async def list_plugins():
-    """List all installed plugins."""
-    from openharness.config import load_settings
-    from openharness.plugins import load_plugins
-
-    settings = load_settings()
-    plugins = load_plugins(settings, str(Path.cwd()))
-    result = []
-    for plugin in plugins:
-        result.append({
-            "name": plugin.manifest.name,
-            "version": plugin.manifest.version,
-            "description": plugin.manifest.description,
-            "enabled": plugin.enabled,
-            "path": str(plugin.path),
-            "skills_count": len(plugin.skills),
-            "commands_count": len(plugin.commands),
-            "agents_count": len(plugin.agents),
-            "mcp_servers_count": len(plugin.mcp_servers),
-        })
-    return result
-
-
-@app.get("/api/plugins/{plugin_name}")
-async def get_plugin(plugin_name: str):
-    """Get plugin details by name."""
-    from openharness.config import load_settings
-    from openharness.plugins import load_plugins
-
-    settings = load_settings()
-    plugins = load_plugins(settings, str(Path.cwd()))
-    plugin = next((p for p in plugins if p.manifest.name == plugin_name), None)
-    if not plugin:
-        raise HTTPException(status_code=404, detail=f"Plugin not found: {plugin_name}")
-    
-    return {
-        "name": plugin.manifest.name,
-        "version": plugin.manifest.version,
-        "description": plugin.manifest.description,
-        "enabled": plugin.enabled,
-        "path": str(plugin.path),
-        "skills": [{"name": s.name, "description": s.description} for s in plugin.skills],
-        "commands": [{"name": c.name, "description": c.description} for c in plugin.commands],
-        "agents": [{"name": a.name, "description": a.description} for a in plugin.agents],
-        "mcp_servers": list(plugin.mcp_servers.keys()),
-    }
-
-
-@app.post("/api/plugins/{plugin_name}/toggle")
-async def toggle_plugin(plugin_name: str):
-    """Enable or disable a plugin."""
-    from openharness.config import load_settings, save_settings
-
-    settings = load_settings()
-    current_enabled = settings.enabled_plugins.get(plugin_name, None)
-    
-    if current_enabled is None:
-        settings.enabled_plugins[plugin_name] = False
-    else:
-        settings.enabled_plugins[plugin_name] = not current_enabled
-    
-    save_settings(settings)
-    return {
-        "status": "ok",
-        "enabled": settings.enabled_plugins[plugin_name],
-    }
-
-
-@app.delete("/api/plugins/{plugin_name}")
-async def uninstall_plugin(plugin_name: str):
-    """Uninstall a plugin."""
-    from openharness.plugins.installer import uninstall_plugin as do_uninstall
-    from openharness.plugins.loader import get_user_plugins_dir
-
-    plugins_dir = get_user_plugins_dir()
-    plugin_path = plugins_dir / plugin_name
-    
-    if not plugin_path.exists():
-        raise HTTPException(status_code=404, detail=f"Plugin not found: {plugin_name}")
-    
-    try:
-        do_uninstall(plugin_name)
-        return {"status": "ok", "message": f"Uninstalled plugin: {plugin_name}"}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to uninstall plugin: {str(e)}")
-
-
-@app.post("/api/plugins/install")
-async def install_plugin(plugin_data: dict):
-    """Install a plugin from a path or URL."""
-    from pathlib import Path as PathLib
-    from openharness.plugins.installer import install_plugin_from_path
-
-    plugin_path = plugin_data.get("path", "")
-    if not plugin_path:
-        raise HTTPException(status_code=400, detail="Plugin path is required")
-    
-    try:
-        path = PathLib(plugin_path)
-        if not path.exists():
-            raise HTTPException(status_code=404, detail=f"Plugin path not found: {plugin_path}")
-        
-        install_plugin_from_path(path)
-        return {"status": "ok", "message": f"Installed plugin from: {plugin_path}"}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to install plugin: {str(e)}")
-
-
-@app.post("/api/plugins/{plugin_name}/reload")
-async def reload_plugin(plugin_name: str):
-    """Reload a plugin."""
-    from openharness.config import load_settings
-    from openharness.plugins import load_plugins
-
-    settings = load_settings()
-    plugins = load_plugins(settings, str(Path.cwd()))
-    plugin = next((p for p in plugins if p.manifest.name == plugin_name), None)
-    if not plugin:
-        raise HTTPException(status_code=404, detail=f"Plugin not found: {plugin_name}")
-    
-    return {
-        "status": "ok",
-        "message": f"Reloaded plugin: {plugin_name}",
-    }
-
-
-# ---------------------------------------------------------------------------
-# MCP API
-# ---------------------------------------------------------------------------
-
-@app.get("/api/mcp/servers")
-async def list_mcp_servers():
-    """List all configured MCP servers."""
-    from openharness.config import load_settings
-
-    settings = load_settings()
-    servers = []
-    for name, config in settings.mcp_servers.items():
-        servers.append({
-            "name": name,
-            "command": config.get("command", ""),
-            "args": config.get("args", []),
-            "env": {k: "***" for k in config.get("env", {}).keys()},
-            "enabled": config.get("enabled", True),
-        })
-    return servers
-
-
-@app.post("/api/mcp/servers")
-async def add_mcp_server(server_data: dict):
-    """Add a new MCP server configuration."""
-    from openharness.config import load_settings, save_settings
-
-    settings = load_settings()
-    name = server_data.get("name", "")
-    if not name:
-        raise HTTPException(status_code=400, detail="Server name is required")
-    
-    settings.mcp_servers[name] = {
-        "command": server_data.get("command", ""),
-        "args": server_data.get("args", []),
-        "env": server_data.get("env", {}),
-        "enabled": server_data.get("enabled", True),
-    }
-    save_settings(settings)
-    return {"status": "ok", "message": f"Added MCP server: {name}"}
-
-
-@app.delete("/api/mcp/servers/{server_name}")
-async def delete_mcp_server(server_name: str):
-    """Delete an MCP server configuration."""
-    from openharness.config import load_settings, save_settings
-
-    settings = load_settings()
-    if server_name not in settings.mcp_servers:
-        raise HTTPException(status_code=404, detail=f"MCP server not found: {server_name}")
-    
-    del settings.mcp_servers[server_name]
-    save_settings(settings)
-    return {"status": "ok", "message": f"Deleted MCP server: {server_name}"}
-
-
-@app.post("/api/mcp/servers/{server_name}/toggle")
-async def toggle_mcp_server(server_name: str):
-    """Enable or disable an MCP server."""
-    from openharness.config import load_settings, save_settings
-
-    settings = load_settings()
-    if server_name not in settings.mcp_servers:
-        raise HTTPException(status_code=404, detail=f"MCP server not found: {server_name}")
-    
-    current = settings.mcp_servers[server_name].get("enabled", True)
-    settings.mcp_servers[server_name]["enabled"] = not current
-    save_settings(settings)
-    return {"status": "ok", "enabled": not current}
-
-
-@app.get("/api/mcp/tools")
-async def list_mcp_tools():
-    """List all tools from connected MCP servers."""
-    from openharness.config import load_settings
-    from openharness.mcp.client import McpClientManager
-
-    settings = load_settings()
-    manager = McpClientManager(settings.mcp_servers)
-    try:
-        await manager.connect_all()
-        tools = manager.list_tools()
-        return tools
-    finally:
-        await manager.close()
-
-
-@app.get("/api/mcp/resources")
-async def list_mcp_resources():
-    """List all resources from connected MCP servers."""
-    from openharness.config import load_settings
-    from openharness.mcp.client import McpClientManager
-
-    settings = load_settings()
-    manager = McpClientManager(settings.mcp_servers)
-    try:
-        await manager.connect_all()
-        resources = manager.list_resources()
-        return resources
-    finally:
-        await manager.close()
-
-
-# ---------------------------------------------------------------------------
-# Memory API
-# ---------------------------------------------------------------------------
-
-@app.get("/api/memory/entries")
-async def list_memory_entries():
-    """List all memory entries."""
-    try:
-        from openharness.memory import scan_memory_files
-
-        entries = []
-        for header in scan_memory_files(Path.cwd(), max_files=200):
-            entries.append({
-                "id": header.id,
-                "title": header.title,
-                "description": header.description,
-                "type": header.memory_type,
-                "path": str(header.path),
-                "modified_at": header.modified_at,
-                "importance": header.importance,
-                "tags": list(header.tags) if hasattr(header, 'tags') else [],
-            })
-        return entries
-    except Exception as e:
-        return {"error": str(e), "entries": []}
-
-
-@app.get("/api/memory/entries/{entry_name}")
-async def get_memory_entry(entry_name: str):
-    """Get a memory entry by name."""
-    try:
-        from openharness.memory import scan_memory_files
-
-        for header in scan_memory_files(Path.cwd(), max_files=200):
-            if entry_name in {header.path.stem, header.path.name, header.title, header.id}:
-                return {
-                    "id": header.id,
-                    "title": header.title,
-                    "description": header.description,
-                    "path": str(header.path),
-                    "type": header.memory_type,
-                    "modified_at": header.modified_at,
-                }
-        raise HTTPException(status_code=404, detail=f"Memory entry not found: {entry_name}")
-    except HTTPException:
-        raise
-    except Exception as e:
-        return {"error": str(e)}
-
-
-@app.post("/api/memory/entries")
-async def add_memory_entry(entry_data: dict):
-    """Add a new memory entry."""
-    try:
-        from openharness.memory import add_memory_entry
-
-        title = entry_data.get("title", entry_data.get("name", ""))
-        content = entry_data.get("content", "")
-        if not title:
-            raise HTTPException(status_code=400, detail="Memory entry title is required")
-        
-        path = add_memory_entry(Path.cwd(), title, content)
-        return {"status": "ok", "message": f"Added memory entry: {title}", "path": str(path)}
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-
-@app.delete("/api/memory/entries/{entry_name}")
-async def delete_memory_entry(entry_name: str):
-    """Delete a memory entry."""
-    try:
-        from openharness.memory import remove_memory_entry
-
-        success = remove_memory_entry(Path.cwd(), entry_name)
-        if not success:
-            raise HTTPException(status_code=404, detail=f"Memory entry not found: {entry_name}")
-        return {"status": "ok", "message": f"Deleted memory entry: {entry_name}"}
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-
-@app.get("/api/memory/search")
-async def search_memory(q: str):
-    """Search memory entries."""
-    try:
-        from openharness.memory import find_relevant_memories
-
-        memories = find_relevant_memories(q, Path.cwd())
-        return {
-            "query": q,
-            "results": [
-                {
-                    "title": m.header.title,
-                    "description": m.header.description,
-                    "freshness": m.freshness,
-                    "path": str(m.header.path),
-                }
-                for m in memories
-            ]
-        }
-    except Exception as e:
-        return {"error": str(e), "results": []}
-
-
-@app.get("/api/memory/md")
-async def get_memory_md():
-    """Get MEMORY.md content."""
-    try:
-        from openharness.memory.paths import get_memory_entrypoint
-
-        entrypoint = get_memory_entrypoint(Path.cwd())
-        content = entrypoint.read_text(encoding="utf-8") if entrypoint.exists() else ""
-        return {"content": content}
-    except Exception as e:
-        return {"error": str(e), "content": ""}
-
-
-@app.post("/api/memory/md")
-async def update_memory_md(data: dict):
-    """Update MEMORY.md content."""
-    try:
-        from openharness.memory.paths import get_memory_entrypoint
-        from openharness.utils.fs import atomic_write_text
-
-        entrypoint = get_memory_entrypoint(Path.cwd())
-        content = data.get("content", "")
-        atomic_write_text(entrypoint, content)
-        return {"status": "ok", "message": "Updated MEMORY.md"}
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-
-# ---------------------------------------------------------------------------
-# Sessions API
-# ---------------------------------------------------------------------------
-
-@app.get("/api/sessions")
-async def list_sessions():
-    """List all saved sessions."""
-    try:
-        from openharness.services import session_storage
-
-        sessions = session_storage.list_session_snapshots(Path.cwd(), limit=50)
-        return sessions
-    except Exception as e:
-        return {"error": str(e), "sessions": []}
-
-
-@app.get("/api/sessions/{session_id}")
-async def get_session(session_id: str):
-    """Get session details."""
-    try:
-        from openharness.services import session_storage
-
-        snapshot = session_storage.load_session_by_id(Path.cwd(), session_id)
-        if not snapshot:
-            raise HTTPException(status_code=404, detail=f"Session not found: {session_id}")
-        
-        return snapshot
-    except HTTPException:
-        raise
-    except Exception as e:
-        return {"error": str(e)}
-
-
-@app.post("/api/sessions/{session_id}/restore")
-async def restore_session(session_id: str):
-    """Restore a session."""
-    try:
-        from openharness.services import session_storage
-
-        snapshot = session_storage.load_session_by_id(Path.cwd(), session_id)
-        if not snapshot:
-            raise HTTPException(status_code=404, detail=f"Session not found: {session_id}")
-        
-        return {
-            "status": "ok",
-            "message": f"Restored session: {session_id}",
-            "messages": snapshot.get("messages", []),
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        return {"error": str(e)}
-
-
-@app.delete("/api/sessions/{session_id}")
-async def delete_session(session_id: str):
-    """Delete a session."""
-    try:
-        from openharness.services import session_storage
-        from openharness.config.paths import get_sessions_dir
-        from pathlib import Path
-        import shutil
-
-        session_dir = session_storage.get_project_session_dir(Path.cwd())
-        path = session_dir / f"session-{session_id}.json"
-        if not path.exists():
-            path = session_dir / "latest.json"
-            if not path.exists():
-                raise HTTPException(status_code=404, detail=f"Session not found: {session_id}")
-        
-        path.unlink()
-        return {"status": "ok", "message": f"Deleted session: {session_id}"}
-    except HTTPException:
-        raise
-    except Exception as e:
-        return {"error": str(e)}
-
-
-@app.get("/api/sessions/latest")
-async def get_latest_session():
-    """Get the latest session."""
-    try:
-        from openharness.services import session_storage
-
-        latest = session_storage.load_session_snapshot(Path.cwd())
-        if not latest:
-            return {"session": None}
-        
-        return {
-            "session": latest
-        }
-    except Exception as e:
-        return {"error": str(e), "session": None}
-
-
-@app.get("/api/sessions/{session_id}/user-messages")
-async def list_session_user_messages(session_id: str):
-    """List all user messages in a session with their indices."""
-    try:
-        from openharness.services.session_storage import list_user_messages_in_session
-
-        user_messages = list_user_messages_in_session(Path.cwd(), session_id)
-        return {"user_messages": user_messages}
-    except Exception as e:
-        return {"error": str(e), "user_messages": []}
-
-
-@app.post("/api/sessions/{session_id}/fork")
-async def fork_session(session_id: str, data: dict):
-    """Fork a session from a specific message index.
-
-    Request body:
-    {
-        "message_index": 5,  // Index of the user message to fork at
-        "new_session_id": "my-fork"  // Optional new session ID
-    }
-    """
-    try:
-        from openharness.services.session_storage import (
-            fork_session_from_message,
-            list_user_messages_in_session,
-        )
-
-        message_index = data.get("message_index")
-        if message_index is None:
-            raise HTTPException(status_code=400, detail="message_index is required")
-
-        # Validate message index
-        user_messages = list_user_messages_in_session(Path.cwd(), session_id)
-        valid_indices = {um["index"] for um in user_messages}
-        if message_index not in valid_indices:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Message index {message_index} is not a user message. Valid indices: {sorted(valid_indices)}",
-            )
-
-        new_session_id = data.get("new_session_id")
-        result_path = fork_session_from_message(
-            cwd=Path.cwd(),
-            source_session_id=session_id,
-            fork_at_message_index=message_index,
-            new_session_id=new_session_id,
-        )
-
-        if result_path is None:
-            raise HTTPException(status_code=500, detail="Failed to fork session")
-
-        forked_session_id = new_session_id or result_path.stem.replace("session-", "")
-        return {
-            "status": "ok",
-            "message": f"Forked session from message {message_index}",
-            "forked_session_id": forked_session_id,
-            "source_session_id": session_id,
-            "forked_at_index": message_index,
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        return {"error": str(e)}
-
-
-# ---------------------------------------------------------------------------
-# Tasks API
-# ---------------------------------------------------------------------------
-
-@app.get("/api/tasks")
-async def list_tasks():
-    """List all tasks."""
-    try:
-        from openharness.tasks import get_task_manager
-
-        manager = get_task_manager()
-        tasks = manager.list_tasks()
-        return [
-            {
-                "id": t.id,
-                "type": t.type,
-                "status": t.status,
-                "description": t.description,
-                "cwd": t.cwd,
-                "command": t.command,
-                "created_at": t.created_at,
-                "started_at": t.started_at,
-                "ended_at": t.ended_at,
-                "return_code": t.return_code,
-            }
-            for t in tasks
-        ]
-    except Exception as e:
-        return {"error": str(e), "tasks": []}
-
-
-@app.get("/api/tasks/{task_id}")
-async def get_task(task_id: str):
-    """Get task details."""
-    try:
-        from openharness.tasks import get_task_manager
-
-        manager = get_task_manager()
-        task = manager.get_task(task_id)
-        if not task:
-            raise HTTPException(status_code=404, detail=f"Task not found: {task_id}")
-        
-        return {
-            "id": task.id,
-            "type": task.type,
-            "status": task.status,
-            "description": task.description,
-            "cwd": task.cwd,
-            "command": task.command,
-            "created_at": task.created_at,
-            "started_at": task.started_at,
-            "ended_at": task.ended_at,
-            "return_code": task.return_code,
-            "metadata": task.metadata,
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        return {"error": str(e)}
-
-
-@app.get("/api/tasks/{task_id}/output")
-async def get_task_output(task_id: str):
-    """Get task output."""
-    try:
-        from openharness.tasks import get_task_manager
-
-        manager = get_task_manager()
-        output = manager.read_task_output(task_id)
-        return {"output": output}
-    except Exception as e:
-        return {"error": str(e), "output": ""}
-
-
-@app.post("/api/tasks/{task_id}/stop")
-async def stop_task_endpoint(task_id: str):
-    """Stop a running task."""
-    try:
-        from openharness.tasks import get_task_manager
-        import asyncio
-
-        manager = get_task_manager()
-        await manager.stop_task(task_id)
-        return {"status": "ok", "message": f"Stopped task: {task_id}"}
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-
-@app.delete("/api/tasks/{task_id}")
-async def delete_task(task_id: str):
-    """Delete a task."""
-    try:
-        from openharness.tasks import get_task_manager
-
-        manager = get_task_manager()
-        task = manager.get_task(task_id)
-        if not task:
-            raise HTTPException(status_code=404, detail=f"Task not found: {task_id}")
-        
-        manager._tasks.pop(task_id, None)
-        return {"status": "ok", "message": f"Deleted task: {task_id}"}
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-
-# ---------------------------------------------------------------------------
-# Commands API
-# ---------------------------------------------------------------------------
-
-@app.get("/api/commands")
-async def list_commands():
-    """List all available slash commands."""
-    try:
-        from openharness.commands import create_default_command_registry
-
-        registry = create_default_command_registry()
-        commands = []
-        for cmd in registry.list_commands():
-            commands.append({
-                "name": cmd.name,
-                "description": cmd.description,
-                "aliases": cmd.aliases,
-            })
-        return commands
-    except Exception as e:
-        return {"error": str(e), "commands": []}
-
-
-@app.get("/api/commands/{command_name}")
-async def get_command(command_name: str):
-    """Get command details."""
-    try:
-        from openharness.commands import create_default_command_registry
-
-        registry = create_default_command_registry()
-        cmd = registry.lookup(f"/{command_name}")
-        if not cmd:
-            raise HTTPException(status_code=404, detail=f"Command not found: {command_name}")
-        
-        return {
-            "name": cmd.name,
-            "description": cmd.description,
-            "aliases": cmd.aliases,
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        return {"error": str(e)}
-
-
-# ---------------------------------------------------------------------------
-# Bridge API
-# ---------------------------------------------------------------------------
-
-@app.get("/api/bridge/sessions")
-async def list_bridge_sessions():
-    """List all bridge sessions."""
-    try:
-        from openharness.bridge import get_bridge_manager
-
-        manager = get_bridge_manager()
-        sessions = manager.list_sessions()
-        return [
-            {
-                "session_id": s.session_id,
-                "command": s.command,
-                "cwd": s.cwd,
-                "pid": s.pid,
-                "status": s.status,
-                "started_at": s.started_at,
-                "output_path": str(s.output_path),
-            }
-            for s in sessions
-        ]
-    except Exception as e:
-        return {"error": str(e), "sessions": []}
-
-
-@app.get("/api/bridge/sessions/{session_id}/output")
-async def get_bridge_session_output(session_id: str):
-    """Get bridge session output."""
-    try:
-        from openharness.bridge import get_bridge_manager
-
-        manager = get_bridge_manager()
-        output = manager.read_output(session_id)
-        return {"output": output}
-    except Exception as e:
-        return {"error": str(e), "output": ""}
-
-
-@app.post("/api/bridge/sessions")
-async def create_bridge_session(data: dict):
-    """Create a new bridge session."""
-    try:
-        from openharness.bridge import get_bridge_manager
-        import asyncio
-
-        manager = get_bridge_manager()
-        session_id = data.get("session_id", "")
-        command = data.get("command", "")
-        cwd = data.get("cwd", str(Path.cwd()))
-        
-        if not session_id or not command:
-            raise HTTPException(status_code=400, detail="session_id and command are required")
-        
-        handle = await manager.spawn(session_id=session_id, command=command, cwd=cwd)
-        return {
-            "status": "ok",
-            "session_id": handle.session_id,
-            "pid": handle.process.pid,
-            "message": f"Created bridge session: {session_id}",
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-
-@app.post("/api/bridge/sessions/{session_id}/stop")
-async def stop_bridge_session(session_id: str):
-    """Stop a bridge session."""
-    try:
-        from openharness.bridge import get_bridge_manager
-        import asyncio
-
-        manager = get_bridge_manager()
-        await manager.stop(session_id)
-        return {"status": "ok", "message": f"Stopped bridge session: {session_id}"}
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-
-# ---------------------------------------------------------------------------
-# Cron API
-# ---------------------------------------------------------------------------
-
-@app.get("/api/cron/jobs")
-async def list_cron_jobs():
-    """List all cron jobs."""
-    # Cron jobs are not yet implemented in Settings model
-    return []
-
-
-@app.post("/api/cron/jobs")
-async def create_cron_job(data: dict):
-    """Create a new cron job."""
-    raise HTTPException(status_code=501, detail="Cron job management is not yet implemented")
-
-
-@app.get("/api/cron/jobs/{job_id}")
-async def get_cron_job(job_id: str):
-    """Get cron job details."""
-    raise HTTPException(status_code=404, detail="Cron job not found")
-
-
-@app.delete("/api/cron/jobs/{job_id}")
-async def delete_cron_job(job_id: str):
-    """Delete a cron job."""
-    raise HTTPException(status_code=404, detail="Cron job not found")
-
-
-@app.post("/api/cron/jobs/{job_id}/toggle")
-async def toggle_cron_job(job_id: str):
-    """Enable or disable a cron job."""
-    raise HTTPException(status_code=404, detail="Cron job not found")

@@ -7,8 +7,7 @@ from pathlib import Path
 import uvicorn
 
 MY_DIR=os.path.dirname(os.path.abspath(__file__))
-HARNESS_DIR=os.path.realpath(MY_DIR+"/../src/openharness")
-print(">>>", HARNESS_DIR)
+HARNESS_DIR=os.path.realpath(MY_DIR+"/../src")
 sys.path.insert(0,HARNESS_DIR)
 
 # Ensure config directory is writable (use project-local .openharness if home is read-only)
