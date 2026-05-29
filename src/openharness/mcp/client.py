@@ -4,14 +4,31 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import os
+import sys
 from contextlib import AsyncExitStack
 from typing import Any
 
 import httpx
-from mcp import ClientSession, StdioServerParameters
-from mcp.client.stdio import stdio_client
-from mcp.client.streamable_http import streamable_http_client
-from mcp.types import CallToolResult, ReadResourceResult
+
+_openharness_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_saved_path_entries = []
+for _i, _p in enumerate(sys.path):
+    try:
+        if os.path.abspath(_p) == _openharness_dir:
+            _saved_path_entries.append((_i, _p))
+    except Exception:
+        pass
+for _i, _ in reversed(_saved_path_entries):
+    sys.path.pop(_i)
+
+from mcp import ClientSession, StdioServerParameters  # noqa: E402
+from mcp.client.stdio import stdio_client  # noqa: E402
+from mcp.client.streamable_http import streamable_http_client  # noqa: E402
+from mcp.types import CallToolResult, ReadResourceResult  # noqa: E402
+
+for _i, _p in _saved_path_entries:
+    sys.path.insert(_i, _p)
 
 from openharness.mcp.types import (
     McpConnectionStatus,
