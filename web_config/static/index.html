@@ -530,6 +530,10 @@
             <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"/></svg>
             <span class="truncate">Tasks 任务</span>
           </button>
+          <button onclick="switchSubView('websearch')" class="sub-nav-btn" data-subview="websearch">
+            <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
+            <span class="truncate">Web Search 搜索</span>
+          </button>
         </nav>
       </div>
       <!-- Chat Submenu (History List) -->
@@ -964,6 +968,91 @@
             </div>
           </div>
         </div>
+
+        <!-- Web Search View -->
+        <div id="viewWebsearch" class="hidden space-y-6">
+          <div class="form-card">
+            <div class="flex items-center gap-3 mb-4">
+              <div class="w-8 h-8 rounded-lg bg-accent-blue/10 flex items-center justify-center">
+                <svg class="w-4 h-4 text-accent-blue" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
+              </div>
+              <div>
+                <h3 class="text-base font-semibold text-text-primary">Web Search 网络搜索</h3>
+                <p class="text-xs text-text-muted">配置 Agent 的网络搜索能力（支持 Tavily、Bing、Google 等）</p>
+              </div>
+            </div>
+            <div class="form-section">
+              <div class="flex items-center justify-between mb-4">
+                <label class="form-label mb-0">启用网络搜索</label>
+                <label class="relative inline-flex items-center cursor-pointer">
+                  <input type="checkbox" id="webSearchEnabled" class="sr-only peer" onchange="toggleWebSearchEnabled()">
+                  <div class="w-11 h-6 bg-dark-border peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-accent-green/20 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-dark-border after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-accent-green"></div>
+                </label>
+              </div>
+            </div>
+            <div id="webSearchConfig" class="space-y-4">
+              <div class="form-section">
+                <div class="form-item">
+                  <label class="form-label">搜索提供商</label>
+                  <select id="webSearchProvider" class="form-input" onchange="onWebSearchProviderChange()">
+                    <option value="duckduckgo">DuckDuckGo (免费，无需 API Key)</option>
+                    <option value="tavily">Tavily AI</option>
+                    <option value="bing">Bing Search</option>
+                    <option value="google">Google Search</option>
+                    <option value="custom">自定义</option>
+                  </select>
+                </div>
+              </div>
+              <div class="form-section">
+                <div class="form-item">
+                  <label class="form-label">API Key</label>
+                  <div class="flex gap-2">
+                    <input type="password" id="webSearchApiKey" class="form-input flex-1" placeholder="输入搜索 API Key（如需要）">
+                    <button type="button" onclick="toggleApiKeyVisibility('webSearchApiKey', this)" class="px-3 py-2 bg-dark-bg-secondary border border-dark-border rounded-lg text-text-muted hover:text-text-primary hover:border-accent-green transition-all duration-200" title="显示/隐藏 API Key">
+                      <svg class="w-4 h-4 eye-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/>
+                      </svg>
+                    </button>
+                  </div>
+                </div>
+              </div>
+              <div class="form-section" id="webSearchSdkSection">
+                <div class="form-item">
+                  <label class="form-label">使用官方 SDK</label>
+                  <label class="relative inline-flex items-center cursor-pointer">
+                    <input type="checkbox" id="webSearchUseSdk" class="sr-only peer">
+                    <div class="w-11 h-6 bg-dark-border peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-accent-green/20 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-dark-border after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-accent-green"></div>
+                    <span class="ml-3 text-sm text-text-muted">启用（推荐，更好的性能和错误处理）</span>
+                  </label>
+                </div>
+              </div>
+              <div class="form-section" id="webSearchBaseUrlSection">
+                <div class="form-item">
+                  <label class="form-label">Base URL (可选，仅自定义模式需要)</label>
+                  <input type="text" id="webSearchBaseUrl" class="form-input" placeholder="https://api.example.com/search">
+                </div>
+              </div>
+              <div class="form-section">
+                <div class="form-item">
+                  <label class="form-label">最大结果数</label>
+                  <input type="number" id="webSearchMaxResults" class="form-input" min="1" max="10" value="5" placeholder="1-10">
+                </div>
+              </div>
+              <div class="form-section">
+                <div class="form-item">
+                  <label class="form-label">自定义搜索端点 URL (仅自定义模式)</label>
+                  <input type="text" id="webSearchCustomUrl" class="form-input" placeholder="https://html.duckduckgo.com/html/">
+                </div>
+              </div>
+              <div class="flex flex-wrap gap-2 items-center pt-4 border-t border-dark-border">
+                <button onclick="saveWebSearchSettings()" class="btn-primary">保存设置</button>
+                <button onclick="testWebSearch()" class="btn-secondary">测试搜索</button>
+              </div>
+              <div id="webSearchTestResult" class="hidden mt-4 p-3 bg-dark-bg-secondary border border-dark-border rounded-lg text-sm"></div>
+            </div>
+          </div>
+        </div>
       </div>
 
       <!-- Chat Workspace (Dual Column) -->
@@ -1083,6 +1172,7 @@
       document.getElementById('viewMcp').classList.toggle('hidden', view !== 'mcp');
       document.getElementById('viewSessions').classList.toggle('hidden', view !== 'sessions');
       document.getElementById('viewTasks').classList.toggle('hidden', view !== 'tasks');
+      document.getElementById('viewWebsearch').classList.toggle('hidden', view !== 'websearch');
       if (view === 'agents') loadAgents();
       if (view === 'skills') loadSkills();
       if (view === 'social') loadSocialSettings();
@@ -1091,6 +1181,7 @@
       if (view === 'mcp') loadMcpServers();
       if (view === 'sessions') loadSessions();
       if (view === 'tasks') loadTasks();
+      if (view === 'websearch') loadWebSearchSettings();
     }
 
     // Data Loading
@@ -2962,6 +3053,171 @@
       const div = document.createElement('div');
       div.textContent = text;
       return div.innerHTML;
+    }
+
+    // Web Search Configuration
+    async function loadWebSearchSettings() {
+      try {
+        const res = await fetch('/api/search-api');
+        const data = await res.json();
+        document.getElementById('webSearchEnabled').checked = data.enabled || false;
+        document.getElementById('webSearchProvider').value = data.provider || 'tavily';
+        document.getElementById('webSearchApiKey').value = data.api_key || '';
+        document.getElementById('webSearchUseSdk').checked = data.use_sdk !== false;
+        document.getElementById('webSearchBaseUrl').value = data.base_url || '';
+        document.getElementById('webSearchMaxResults').value = data.max_results || 5;
+        document.getElementById('webSearchCustomUrl').value = data.base_url || '';
+        toggleWebSearchEnabled();
+        onWebSearchProviderChange();
+      } catch (e) {
+        console.error('Failed to load web search settings:', e);
+      }
+    }
+
+    function toggleWebSearchEnabled() {
+      const enabled = document.getElementById('webSearchEnabled').checked;
+      const config = document.getElementById('webSearchConfig');
+      config.style.opacity = enabled ? '1' : '0.5';
+      config.style.pointerEvents = enabled ? 'auto' : 'none';
+    }
+
+    function toggleApiKeyVisibility(inputId, button) {
+      const input = document.getElementById(inputId);
+      const icon = button.querySelector('.eye-icon');
+      if (input.type === 'password') {
+        input.type = 'text';
+        icon.innerHTML = `
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21"/>
+        `;
+      } else {
+        input.type = 'password';
+        icon.innerHTML = `
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/>
+        `;
+      }
+    }
+
+    function onWebSearchProviderChange() {
+      const provider = document.getElementById('webSearchProvider').value;
+      const apiKeyInput = document.getElementById('webSearchApiKey');
+      const baseUrlInput = document.getElementById('webSearchBaseUrl');
+      const customUrlInput = document.getElementById('webSearchCustomUrl');
+      const sdkSection = document.getElementById('webSearchSdkSection');
+      const baseUrlSection = document.getElementById('webSearchBaseUrlSection');
+      
+      apiKeyInput.placeholder = '输入搜索 API Key（如需要）';
+      baseUrlInput.placeholder = 'https://api.example.com/search';
+      customUrlInput.parentElement.style.display = 'none';
+      sdkSection.style.display = 'block';
+      baseUrlSection.style.display = 'block';
+      
+      switch(provider) {
+        case 'duckduckgo':
+          apiKeyInput.placeholder = 'DuckDuckGo 无需 API Key';
+          sdkSection.style.display = 'none';
+          baseUrlSection.style.display = 'none';
+          break;
+        case 'tavily':
+          apiKeyInput.placeholder = 'tvly-...';
+          baseUrlInput.placeholder = 'https://api.tavily.com/search (使用 HTTP 模式时)';
+          break;
+        case 'bing':
+          apiKeyInput.placeholder = 'Bing Search API Key';
+          baseUrlInput.placeholder = 'https://api.bing.microsoft.com/v7.0/search';
+          break;
+        case 'google':
+          apiKeyInput.placeholder = 'Google Custom Search API Key';
+          baseUrlInput.placeholder = 'https://www.googleapis.com/customsearch/v1';
+          break;
+        case 'custom':
+          customUrlInput.parentElement.style.display = 'block';
+          sdkSection.style.display = 'none';
+          break;
+      }
+    }
+
+    async function saveWebSearchSettings() {
+      const enabled = document.getElementById('webSearchEnabled').checked;
+      const provider = document.getElementById('webSearchProvider').value;
+      const apiKey = document.getElementById('webSearchApiKey').value;
+      const useSdk = document.getElementById('webSearchUseSdk').checked;
+      const baseUrl = document.getElementById('webSearchBaseUrl').value;
+      const maxResults = parseInt(document.getElementById('webSearchMaxResults').value) || 5;
+      
+      try {
+        const res = await fetch('/api/search-api', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            enabled,
+            provider,
+            api_key: apiKey,
+            use_sdk: useSdk,
+            base_url: baseUrl,
+            max_results: maxResults
+          })
+        });
+        
+        if (res.ok) {
+          showNotification('Web Search 设置已保存', 'success');
+        } else {
+          showNotification('保存失败', 'error');
+        }
+      } catch (e) {
+        showNotification(`保存失败: ${e.message}`, 'error');
+      }
+    }
+
+    async function testWebSearch() {
+      const resultDiv = document.getElementById('webSearchTestResult');
+      resultDiv.classList.remove('hidden');
+      resultDiv.innerHTML = '<div class="text-text-muted">测试中...</div>';
+      
+      try {
+        const res = await fetch('/api/search-api/test', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ query: 'OpenHarness AI agent' })
+        });
+        
+        const data = await res.json();
+        if (res.ok) {
+          resultDiv.innerHTML = `
+            <div class="text-accent-green mb-2">✓ 搜索测试成功</div>
+            <div class="text-text-secondary text-xs whitespace-pre-wrap">${escapeHtml(data.output || 'No results')}</div>
+          `;
+        } else {
+          resultDiv.innerHTML = `
+            <div class="text-red-400 mb-2">✗ 搜索测试失败</div>
+            <div class="text-text-secondary text-xs">${escapeHtml(data.detail || 'Unknown error')}</div>
+          `;
+        }
+      } catch (e) {
+        resultDiv.innerHTML = `
+          <div class="text-red-400 mb-2">✗ 请求失败</div>
+          <div class="text-text-secondary text-xs">${escapeHtml(e.message)}</div>
+        `;
+      }
+    }
+
+    function showNotification(message, type = 'info') {
+      const colors = {
+        success: 'bg-accent-green/10 text-accent-green border-accent-green/20',
+        error: 'bg-red-500/10 text-red-400 border-red-500/20',
+        info: 'bg-accent-blue/10 text-accent-blue border-accent-blue/20'
+      };
+      
+      const notification = document.createElement('div');
+      notification.className = `fixed top-20 right-5 z-50 px-4 py-3 rounded-lg border ${colors[type]} animate-slide-up`;
+      notification.textContent = message;
+      document.body.appendChild(notification);
+      
+      setTimeout(() => {
+        notification.style.opacity = '0';
+        notification.style.transition = 'opacity 0.3s';
+        setTimeout(() => notification.remove(), 300);
+      }, 3000);
     }
 
     function hotReload() {

@@ -1121,3 +1121,150 @@ async def get_mcp_servers():
             "url": getattr(config, "url", ""),
         })
     return servers
+
+
+class SearchApiUpdate(BaseModel):
+    enabled: bool = False
+    provider: str = "tavily"
+    api_key: str = ""
+    use_sdk: bool = True
+    base_url: str = ""
+    max_results: int = 5
+
+
+@app.get("/api/search-api")
+async def get_search_api():
+    """Get web search API configuration."""
+    data = _load_settings()
+    search_config = data.get("search_api", {})
+    return {
+        "enabled": search_config.get("enabled", False),
+        "provider": search_config.get("provider", "tavily"),
+        "api_key": search_config.get("api_key", ""),
+        "use_sdk": search_config.get("use_sdk", True),
+        "base_url": search_config.get("base_url", ""),
+        "max_results": search_config.get("max_results", 5),
+    }
+
+
+@app.post("/api/search-api")
+async def update_search_api(update: SearchApiUpdate):
+    """Update web search API configuration."""
+    data = _load_settings()
+    data["search_api"] = {
+        "enabled": update.enabled,
+        "provider": update.provider,
+        "api_key": update.api_key,
+        "use_sdk": update.use_sdk,
+        "base_url": update.base_url,
+        "max_results": update.max_results,
+    }
+    _save_settings(data)
+    return {"status": "ok"}
+
+
+@app.post("/api/search-api/test")
+async def test_search_api(data: dict):
+    """Test the web search configuration."""
+    import os
+    import httpx
+    import logging
+    from openharness.utils.network_guard import fetch_public_http_response
+    
+    logger = logging.getLogger(__name__)
+    query = data.get("query", "test")
+    settings_data = _load_settings()
+    search_config = settings_data.get("search_api", {})
+    
+    provider = search_config.get("provider", "tavily")
+    api_key = search_config.get("api_key", "")
+    use_sdk = search_config.get("use_sdk", True)
+    base_url = search_config.get("base_url", "")
+    
+    logger.info(f"Testing search: provider={provider}, use_sdk={use_sdk}, has_api_key={bool(api_key)}")
+    
+    try:
+        if provider == "tavily" and api_key:
+            if use_sdk:
+                try:
+                    from tavily import TavilyClient
+                    client = TavilyClient(api_key=api_key)
+                    response = client.search(query=query, max_results=3)
+                    results = response.get("results", [])
+                except ImportError:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="tavily-python SDK not installed. Install with: pip install tavily-python"
+                    )
+            else:
+                endpoint = base_url or "https://api.tavily.com/search"
+                headers = {"Content-Type": "application/json"}
+                response = await httpx.AsyncClient().post(
+                    endpoint,
+                    json={"query": query, "api_key": api_key, "max_results": 3},
+                    headers=headers,
+                    timeout=20.0,
+                )
+                response.raise_for_status()
+                results = response.json().get("results", [])
+            
+            if results:
+                output_lines = [f"Search results for: {query}"]
+                for i, r in enumerate(results[:3], 1):
+                    output_lines.append(f"{i}. {r.get('title', 'N/A')}")
+                    output_lines.append(f"   URL: {r.get('url', 'N/A')}")
+                    output_lines.append(f"   {r.get('content', '')[:200]}")
+                return {"output": "\n".join(output_lines)}
+            return {"output": "No results found"}
+        elif provider in ("bing", "google") and api_key:
+            endpoint = base_url
+            if not endpoint:
+                if provider == "bing":
+                    endpoint = "https://api.bing.microsoft.com/v7.0/search"
+                elif provider == "google":
+                    endpoint = "https://www.googleapis.com/customsearch/v1"
+            
+            if provider == "bing":
+                response = await httpx.AsyncClient().get(
+                    endpoint,
+                    params={"q": query, "count": 3},
+                    headers={"Ocp-Apim-Subscription-Key": api_key},
+                    timeout=20.0,
+                )
+            elif provider == "google":
+                response = await httpx.AsyncClient().get(
+                    endpoint,
+                    params={
+                        "q": query,
+                        "key": api_key,
+                        "cx": os.environ.get("GOOGLE_SEARCH_CX", ""),
+                        "num": 3,
+                    },
+                    timeout=20.0,
+                )
+            response.raise_for_status()
+            data = response.json()
+            results = data.get("webPages", {}).get("value", []) if provider == "bing" else data.get("items", [])
+            if results:
+                output_lines = [f"Search results for: {query}"]
+                for i, r in enumerate(results[:3], 1):
+                    output_lines.append(f"{i}. {r.get('name' if provider == 'bing' else 'title', 'N/A')}")
+                    output_lines.append(f"   URL: {r.get('url' if provider == 'bing' else 'link', 'N/A')}")
+                    output_lines.append(f"   {r.get('snippet', '')[:200]}")
+                return {"output": "\n".join(output_lines)}
+            return {"output": "No results found"}
+        else:
+            endpoint = base_url or "https://html.duckduckgo.com/html/"
+            response = await fetch_public_http_response(
+                endpoint,
+                params={"q": query},
+                headers={"User-Agent": "OpenHarness/0.1"},
+                timeout=20.0,
+            )
+            response.raise_for_status()
+            return {"output": f"Search endpoint reachable. HTML response length: {len(response.text)}"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Search test failed: {e}", exc_info=True)
+        raise HTTPException(status_code=400, detail=f"Search test failed: {str(e)}")

@@ -42,7 +42,33 @@ class WebSearchTool(BaseTool):
         context: ToolExecutionContext,
     ) -> ToolResult:
         del context
-        endpoint = arguments.search_url or os.environ.get("OPENHARNESS_WEB_SEARCH_URL") or "https://html.duckduckgo.com/html/"
+        endpoint = arguments.search_url or os.environ.get("OPENHARNESS_WEB_SEARCH_URL")
+        
+        if not endpoint:
+            try:
+                from openharness.config import load_settings
+                settings = load_settings()
+                search_config = settings.search_api
+                
+                if search_config.enabled:
+                    provider = search_config.provider
+                    base_url = search_config.base_url
+                    
+                    if provider == "tavily":
+                        return await self._execute_tavily_search(arguments, search_config)
+                    elif provider == "bing":
+                        return await self._execute_bing_search(arguments, search_config)
+                    elif provider == "google":
+                        return await self._execute_google_search(arguments, search_config)
+                    elif provider == "custom" and base_url:
+                        endpoint = base_url
+                    else:
+                        endpoint = "https://html.duckduckgo.com/html/"
+                else:
+                    endpoint = "https://html.duckduckgo.com/html/"
+            except Exception:
+                endpoint = "https://html.duckduckgo.com/html/"
+        
         try:
             response = await fetch_public_http_response(
                 endpoint,
@@ -64,6 +90,180 @@ class WebSearchTool(BaseTool):
             lines.append(f"   URL: {result['url']}")
             if result["snippet"]:
                 lines.append(f"   {result['snippet']}")
+        return ToolResult(output="\n".join(lines))
+
+    async def _execute_tavily_search(
+        self,
+        arguments: WebSearchToolInput,
+        search_config,
+    ) -> ToolResult:
+        api_key = search_config.api_key
+        if not api_key:
+            return ToolResult(output="web_search failed: Tavily API key not configured", is_error=True)
+        
+        use_sdk = getattr(search_config, 'use_sdk', True)
+        
+        if use_sdk:
+            return await self._execute_tavily_with_sdk(arguments, api_key)
+        else:
+            return await self._execute_tavily_with_http(arguments, search_config)
+    
+    async def _execute_tavily_with_sdk(
+        self,
+        arguments: WebSearchToolInput,
+        api_key: str,
+    ) -> ToolResult:
+        try:
+            from tavily import TavilyClient
+        except ImportError:
+            return ToolResult(
+                output="web_search failed: tavily-python SDK not installed. Install with: pip install tavily-python",
+                is_error=True,
+            )
+        
+        try:
+            client = TavilyClient(api_key=api_key)
+            response = client.search(
+                query=arguments.query,
+                max_results=arguments.max_results,
+            )
+        except Exception as exc:
+            return ToolResult(output=f"web_search failed: {exc}", is_error=True)
+        
+        results = response.get("results", [])
+        if not results:
+            return ToolResult(output="No search results found.", is_error=True)
+        
+        lines = [f"Search results for: {arguments.query}"]
+        for index, result in enumerate(results[:arguments.max_results], start=1):
+            lines.append(f"{index}. {result.get('title', 'N/A')}")
+            lines.append(f"   URL: {result.get('url', 'N/A')}")
+            content = result.get("content", "")
+            if content:
+                lines.append(f"   {content[:300]}")
+        return ToolResult(output="\n".join(lines))
+    
+    async def _execute_tavily_with_http(
+        self,
+        arguments: WebSearchToolInput,
+        search_config,
+    ) -> ToolResult:
+        import httpx
+        from openharness.utils.network_guard import NetworkGuardError
+        
+        api_key = search_config.api_key
+        endpoint = search_config.base_url or "https://api.tavily.com/search"
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.post(
+                    endpoint,
+                    json={
+                        "query": arguments.query,
+                        "api_key": api_key,
+                        "max_results": arguments.max_results,
+                    },
+                    headers={"Content-Type": "application/json"},
+                    timeout=20.0,
+                )
+                response.raise_for_status()
+        except (httpx.HTTPError, NetworkGuardError) as exc:
+            return ToolResult(output=f"web_search failed: {exc}", is_error=True)
+        
+        data = response.json()
+        results = data.get("results", [])
+        if not results:
+            return ToolResult(output="No search results found.", is_error=True)
+        
+        lines = [f"Search results for: {arguments.query}"]
+        for index, result in enumerate(results[:arguments.max_results], start=1):
+            lines.append(f"{index}. {result.get('title', 'N/A')}")
+            lines.append(f"   URL: {result.get('url', 'N/A')}")
+            content = result.get("content", "")
+            if content:
+                lines.append(f"   {content[:300]}")
+        return ToolResult(output="\n".join(lines))
+
+    async def _execute_bing_search(
+        self,
+        arguments: WebSearchToolInput,
+        search_config,
+    ) -> ToolResult:
+        import httpx
+        from openharness.utils.network_guard import NetworkGuardError
+        
+        api_key = search_config.api_key
+        if not api_key:
+            return ToolResult(output="web_search failed: Bing API key not configured", is_error=True)
+        
+        endpoint = search_config.base_url or "https://api.bing.microsoft.com/v7.0/search"
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.get(
+                    endpoint,
+                    params={"q": arguments.query, "count": arguments.max_results},
+                    headers={"Ocp-Apim-Subscription-Key": api_key},
+                    timeout=20.0,
+                )
+                response.raise_for_status()
+        except (httpx.HTTPError, NetworkGuardError) as exc:
+            return ToolResult(output=f"web_search failed: {exc}", is_error=True)
+        
+        data = response.json()
+        web_pages = data.get("webPages", {})
+        results = web_pages.get("value", [])
+        if not results:
+            return ToolResult(output="No search results found.", is_error=True)
+        
+        lines = [f"Search results for: {arguments.query}"]
+        for index, result in enumerate(results[:arguments.max_results], start=1):
+            lines.append(f"{index}. {result.get('name', 'N/A')}")
+            lines.append(f"   URL: {result.get('url', 'N/A')}")
+            snippet = result.get("snippet", "")
+            if snippet:
+                lines.append(f"   {snippet}")
+        return ToolResult(output="\n".join(lines))
+
+    async def _execute_google_search(
+        self,
+        arguments: WebSearchToolInput,
+        search_config,
+    ) -> ToolResult:
+        import httpx
+        from openharness.utils.network_guard import NetworkGuardError
+        
+        api_key = search_config.api_key
+        if not api_key:
+            return ToolResult(output="web_search failed: Google API key not configured", is_error=True)
+        
+        endpoint = search_config.base_url or "https://www.googleapis.com/customsearch/v1"
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.get(
+                    endpoint,
+                    params={
+                        "q": arguments.query,
+                        "key": api_key,
+                        "cx": os.environ.get("GOOGLE_SEARCH_CX", ""),
+                        "num": min(arguments.max_results, 10),
+                    },
+                    timeout=20.0,
+                )
+                response.raise_for_status()
+        except (httpx.HTTPError, NetworkGuardError) as exc:
+            return ToolResult(output=f"web_search failed: {exc}", is_error=True)
+        
+        data = response.json()
+        results = data.get("items", [])
+        if not results:
+            return ToolResult(output="No search results found.", is_error=True)
+        
+        lines = [f"Search results for: {arguments.query}"]
+        for index, result in enumerate(results[:arguments.max_results], start=1):
+            lines.append(f"{index}. {result.get('title', 'N/A')}")
+            lines.append(f"   URL: {result.get('link', 'N/A')}")
+            snippet = result.get("snippet", "")
+            if snippet:
+                lines.append(f"   {snippet}")
         return ToolResult(output="\n".join(lines))
 
 

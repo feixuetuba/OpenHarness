@@ -579,9 +579,10 @@ class SearchApiConfig(BaseModel):
     """Configuration for search API integrations."""
     
     enabled: bool = False
-    provider: str = "bing"  # bing, google, duckduckgo, custom
+    provider: str = "tavily"  # tavily, bing, google, duckduckgo, custom
     api_key: str = ""
     base_url: str = ""
+    use_sdk: bool = True  # Use official SDK when available (e.g., tavily-python)
     default_query: str = ""
     max_results: int = 10
 
