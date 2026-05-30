@@ -184,13 +184,28 @@ class QQChannel(BaseChannel):
             return False, reason
 
         mode = self._media_mode(media_path, msg)
-        file_type = self._qq_file_type(path, mode)
+        kind = self._media_kind(media_path, msg)
+        is_group = self._is_group_chat(msg)
+        file_type = self._qq_file_type(path, mode, kind)
+        
+        if is_group and file_type == 4:
+            reason = "QQ 群聊暂不开放文件类型发送，请改用单聊或发送图片/视频/语音"
+            logger.warning("%s: %s", reason, media_path)
+            self._debug_media_event(
+                "blocked_group_file",
+                media_path=str(path),
+                kind=kind,
+                file_type=file_type,
+            )
+            return False, reason
+        
         try:
             self._debug_media_event(
                 "send_start",
                 openid=openid,
                 media_path=str(path),
                 mode=mode,
+                kind=kind,
                 file_type=file_type,
                 url=url,
             )
@@ -220,6 +235,7 @@ class QQChannel(BaseChannel):
                 "send_failed",
                 media_path=str(path),
                 mode=mode,
+                kind=kind,
                 file_type=file_type,
                 url=url,
                 error=detail,
@@ -380,19 +396,64 @@ class QQChannel(BaseChannel):
         return "file"
 
     @staticmethod
+    def _media_kind(media_path: str, msg: OutboundMessage) -> str:
+        """获取媒体类型：image/video/audio/document。优先从 _media_kinds 读取，否则根据扩展名推断。"""
+        kinds = msg.metadata.get("_media_kinds") if isinstance(msg.metadata, dict) else None
+        if isinstance(kinds, dict) and media_path in kinds:
+            return str(kinds[media_path])
+        
+        mime, _ = mimetypes.guess_type(media_path)
+        suffix = Path(media_path).suffix.lower()
+        
+        if mime and mime.startswith("image/") or suffix in {".jpg", ".jpeg", ".png", ".gif", ".webp"}:
+            return "image"
+        if mime and mime.startswith("video/") or suffix in {".mp4", ".mov", ".avi"}:
+            return "video"
+        if mime and mime.startswith("audio/") or suffix in {".mp3", ".ogg", ".wav", ".flac", ".aac", ".m4a", ".opus", ".amr", ".silk"}:
+            return "audio"
+        return "document"
+
+    @staticmethod
+    def _is_group_chat(msg: OutboundMessage) -> bool:
+        """判断是否是群聊。从 metadata 中读取 is_group 或 chat_type。"""
+        if not isinstance(msg.metadata, dict):
+            return False
+        if msg.metadata.get("is_group") is True:
+            return True
+        chat_type = str(msg.metadata.get("chat_type") or "").lower()
+        return chat_type == "group"
+
+    @staticmethod
     def _qq_msg_type_for_media(path: Path, mode: str) -> int:
         if mode == "image" or path.suffix.lower() in {".jpg", ".jpeg", ".png", ".gif", ".webp"}:
             return 7
         return 0
 
     @staticmethod
-    def _qq_file_type(path: Path, mode: str) -> int:
+    def _qq_file_type(path: Path, mode: str, kind: str = None) -> int:
+        """根据 kind 或 mode/扩展名决定 file_type。
+        
+        kind=document → file_type=4 (普通文件)
+        kind=audio → file_type=3 (语音)
+        kind=video → file_type=2 (视频)
+        kind=image → file_type=1 (图片)
+        未指定 kind 时，根据 mode 和扩展名推断
+        """
+        if kind == "document":
+            return 4
+        if kind == "audio":
+            return 3
+        if kind == "video":
+            return 2
+        if kind == "image":
+            return 1
+        
         suffix = path.suffix.lower()
         if mode == "image" or suffix in {".jpg", ".jpeg", ".png"}:
             return 1
         if mode == "video" or suffix == ".mp4":
             return 2
-        if mode == "voice" or suffix in {".silk", ".slk"}:
+        if mode in {"voice", "audio"} or suffix in {".silk", ".slk", ".mp3", ".ogg", ".wav", ".amr", ".flac", ".aac", ".m4a", ".opus"}:
             return 3
         return 4
 
