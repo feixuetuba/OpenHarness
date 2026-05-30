@@ -7,10 +7,12 @@ including providers, models, authentication, permissions, and more.
 from __future__ import annotations
 
 import json
+import logging
 import re
 import shutil
 import sys
 import zipfile
+from contextlib import asynccontextmanager
 from dataclasses import asdict, is_dataclass
 from io import BytesIO
 from pathlib import Path
@@ -24,7 +26,26 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
-app = FastAPI(title="OpenHarness Web Config")
+from web_config.channel_runtime import WebConfigChannelRuntime
+
+logger = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    runtime = WebConfigChannelRuntime(cwd=Path.cwd())
+    app.state.channel_runtime = runtime
+    try:
+        await runtime.start(_load_settings())
+    except Exception:
+        logger.exception("Failed to start OpenHarness channel runtime")
+    try:
+        yield
+    finally:
+        await runtime.stop()
+
+
+app = FastAPI(title="OpenHarness Web Config", lifespan=lifespan)
 
 STATIC_DIR = Path(__file__).parent / "static"
 
@@ -130,6 +151,46 @@ def _update_settings_section(section: str, values: dict[str, Any]) -> None:
     _save_settings(data)
 
 
+def _split_csv_list(value: Any) -> list[str]:
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    return [item.strip() for item in str(value or "").split(",") if item.strip()]
+
+
+def _sync_social_platforms_to_channels(values: dict[str, Any]) -> None:
+    """Keep OpenHarness social settings aligned with runtime channel config."""
+    if "qq_enabled" not in values:
+        return
+
+    data = _load_settings()
+    channels = data.get("channels", {})
+    if not isinstance(channels, dict):
+        channels = {}
+
+    qq_config = channels.get("qq", {})
+    if not isinstance(qq_config, dict):
+        qq_config = {}
+
+    if values.get("qq_enabled"):
+        qq_config["enabled"] = True
+        qq_config["app_id"] = str(values.get("qq_app_id") or qq_config.get("app_id") or "")
+        qq_config["app_secret"] = str(
+            values.get("qq_app_secret") or qq_config.get("app_secret") or ""
+        )
+        if "qq_allow_from" in values:
+            qq_config["allow_from"] = _split_csv_list(values.get("qq_allow_from"))
+        if "qq_sandbox" in values:
+            qq_config["sandbox"] = bool(values.get("qq_sandbox"))
+        channels["qq"] = qq_config
+    else:
+        if qq_config:
+            qq_config["enabled"] = False
+            channels["qq"] = qq_config
+
+    data["channels"] = channels
+    _save_settings(data)
+
+
 def _safe_slug(value: str, default: str = "skill") -> str:
     slug = re.sub(r"[^A-Za-z0-9_.-]+", "-", value.strip()).strip(".-")
     return slug or default
@@ -222,7 +283,14 @@ class AgentChatRequest(BaseModel):
 @app.get("/")
 async def index():
     """Serve the main configuration page."""
-    return FileResponse(STATIC_DIR / "index.html")
+    from fastapi.responses import HTMLResponse
+    
+    html_content = (STATIC_DIR / "index.html").read_text()
+    response = HTMLResponse(content=html_content)
+    response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+    return response
 
 
 @app.get("/api/settings")
@@ -744,7 +812,109 @@ async def get_social_platforms():
 async def update_social_platforms(data: dict):
     """Update social platform settings."""
     _update_settings_section("social_platforms", data)
+    _sync_social_platforms_to_channels(data)
+    runtime = getattr(app.state, "channel_runtime", None)
+    if runtime is not None:
+        try:
+            await runtime.restart(_load_settings())
+        except Exception:
+            logger.exception("Failed to restart OpenHarness channel runtime")
+            raise HTTPException(status_code=500, detail="Saved config, but failed to restart channels")
     return {"status": "ok"}
+
+
+@app.post("/api/social-platforms/{platform_name}/test")
+async def test_social_platform(platform_name: str, data: dict = None):
+    """Test connection to a social platform."""
+    from openharness.channels.social_sdk import SDKRegistry
+    
+    if data is None:
+        data = {}
+    
+    try:
+        settings = _get_settings_obj()
+        current_config = settings.social_platforms
+        
+        if platform_name == "feishu":
+            from openharness.channels.social_sdk import FeishuConfig
+            config = FeishuConfig(
+                enabled=data.get("enabled", current_config.feishu_enabled),
+                api_url=data.get("api_url", current_config.feishu_api_url),
+                app_id=data.get("app_id", current_config.feishu_app_id),
+                app_secret=data.get("app_secret", current_config.feishu_app_secret),
+                encrypt_key=data.get("encrypt_key", ""),
+                verification_token=data.get("verification_token", ""),
+                domain=data.get("domain", data.get("api_url", "") or "https://open.feishu.cn"),
+            )
+        elif platform_name == "wechat":
+            from openharness.channels.social_sdk import WechatConfig
+            config = WechatConfig(
+                enabled=data.get("enabled", current_config.wechat_enabled),
+                api_url=data.get("api_url", current_config.wechat_api_url),
+                app_id=data.get("app_id", ""),
+                app_secret=data.get("app_secret", ""),
+                token=data.get("token", current_config.wechat_token),
+                aes_key=data.get("aes_key", current_config.wechat_aes_key),
+            )
+        elif platform_name == "qq":
+            from openharness.channels.social_sdk import QQConfig
+            config = QQConfig(
+                enabled=data.get("enabled", current_config.qq_enabled),
+                api_url=data.get("api_url", current_config.qq_api_url),
+                app_id=data.get("app_id", current_config.qq_app_id),
+                app_secret=data.get("app_secret", current_config.qq_app_secret),
+                redirect_uri=data.get("redirect_uri", ""),
+            )
+        elif platform_name == "dingtalk":
+            from openharness.channels.social_sdk import DingtalkConfig
+            config = DingtalkConfig(
+                enabled=data.get("enabled", False),
+                api_url=data.get("api_url", ""),
+                app_key=data.get("app_key", ""),
+                app_secret=data.get("app_secret", ""),
+                robot_code=data.get("robot_code", ""),
+            )
+        else:
+            raise HTTPException(status_code=404, detail=f"Unknown platform: {platform_name}")
+        
+        sdk = SDKRegistry.create_sdk(platform_name, config)
+        if sdk is None:
+            raise HTTPException(status_code=404, detail=f"No SDK adapter for platform: {platform_name}")
+        
+        if not sdk.is_sdk_available():
+            return {
+                "success": False,
+                "message": f"{platform_name} SDK not installed",
+                "error": f"Please install the required SDK package for {platform_name}",
+            }
+        
+        result = await sdk.test_connection()
+        
+        return {
+            "success": result.success,
+            "message": result.message,
+            "details": result.details,
+            "error": result.error,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Test failed: {str(e)}")
+
+
+@app.get("/api/channels/status")
+async def get_channels_status():
+    """Get runtime channel status for the web-config process."""
+    runtime = getattr(app.state, "channel_runtime", None)
+    if runtime is None:
+        return {"running_channels": [], "channels": {}}
+    manager = getattr(runtime, "_manager", None)
+    return {
+        "running_channels": runtime.running_channels,
+        "channels": manager.get_status() if manager is not None else {},
+    }
 
 
 @app.get("/api/skill-management")

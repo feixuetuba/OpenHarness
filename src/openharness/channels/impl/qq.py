@@ -18,8 +18,10 @@ try:
     from botpy.message import C2CMessage
 
     QQ_AVAILABLE = True
-except ImportError:
+    QQ_IMPORT_ERROR: Exception | None = None
+except ImportError as exc:
     QQ_AVAILABLE = False
+    QQ_IMPORT_ERROR = exc
     botpy = None
     C2CMessage = None
 
@@ -34,9 +36,15 @@ def _make_bot_class(channel: "QQChannel") -> "type[botpy.Client]":
     class _Bot(botpy.Client):
         def __init__(self):
             # Disable botpy's file log — not using loguru; default "botpy.log" fails on read-only fs
-            super().__init__(intents=intents, ext_handlers=False)
+            super().__init__(
+                intents=intents,
+                ext_handlers=False,
+                is_sandbox=bool(getattr(channel.config, "sandbox", False)),
+            )
 
         async def on_ready(self):
+            channel.online = True
+            channel.last_error = None
             logger.info("QQ bot ready: %s", self.robot.name)
 
         async def on_c2c_message_create(self, message: "C2CMessage"):
@@ -59,14 +67,21 @@ class QQChannel(BaseChannel):
         self._client: "botpy.Client | None" = None
         self._processed_ids: deque = deque(maxlen=1000)
         self._msg_seq: int = 1  # 消息序列号，避免被 QQ API 去重
+        self.online: bool = False
+        self.last_error: str | None = None
 
     async def start(self) -> None:
         """Start the QQ bot."""
         if not QQ_AVAILABLE:
-            logger.error("QQ SDK not installed. Run: pip install qq-botpy")
+            self.last_error = f"QQ SDK import failed: {QQ_IMPORT_ERROR}"
+            logger.error(
+                "QQ SDK not installed or failed to import. Run: pip install qq-botpy. error=%s",
+                QQ_IMPORT_ERROR,
+            )
             return
 
-        if not self.config.app_id or not self.config.secret:
+        if not self.config.app_id or not self.config.app_secret:
+            self.last_error = "QQ app_id and secret not configured"
             logger.error("QQ app_id and secret not configured")
             return
 
@@ -81,9 +96,12 @@ class QQChannel(BaseChannel):
         """Run the bot connection with auto-reconnect."""
         while self._running:
             try:
-                await self._client.start(appid=self.config.app_id, secret=self.config.secret)
+                self.online = False
+                await self._client.start(appid=self.config.app_id, secret=self.config.app_secret)
             except Exception as e:
-                logger.warning("QQ bot error: %s", e)
+                self.online = False
+                self.last_error = str(e)
+                logger.warning("QQ bot error: %s", e, exc_info=True)
             if self._running:
                 logger.info("Reconnecting QQ bot in 5 seconds...")
                 await asyncio.sleep(5)
@@ -91,6 +109,7 @@ class QQChannel(BaseChannel):
     async def stop(self) -> None:
         """Stop the QQ bot."""
         self._running = False
+        self.online = False
         if self._client:
             try:
                 await self._client.close()
@@ -138,4 +157,3 @@ class QQChannel(BaseChannel):
             )
         except Exception:
             logger.exception("Error handling QQ message")
-

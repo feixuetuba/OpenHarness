@@ -2,16 +2,20 @@
 """Start the OpenHarness Web Configuration Manager."""
 
 import argparse
+import logging
 import sys
 from pathlib import Path
 
 # Add project root to path so we can import openharness
-project_root = Path(__file__).parent.parent / "src"
-if str(project_root) not in sys.path:
-    sys.path.insert(0, str(project_root))
+project_root = Path(__file__).parent.parent
+src_root = project_root / "src"
+for path in (project_root, src_root):
+    if str(path) not in sys.path:
+        sys.path.insert(0, str(path))
 
 
 def main():
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(levelname)s %(message)s")
     parser = argparse.ArgumentParser(description="OpenHarness Web Config Manager")
     parser.add_argument("--host", default="0.0.0.0", help="Host to bind to (default: 0.0.0.0)")
     parser.add_argument("--port", type=int, default=8899, help="Port to bind to (default: 8899)")
@@ -26,6 +30,9 @@ def main():
 
     print(f"Starting OpenHarness Web Config Manager...")
     print(f"  URL: http://{args.host if args.host != '0.0.0.0' else 'localhost'}:{args.port}")
+    from openharness.config.paths import get_config_file_path
+
+    print(f"  Settings: {get_config_file_path()}")
     print()
 
     uvicorn.run(

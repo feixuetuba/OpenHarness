@@ -6,7 +6,9 @@ OpenHarness settings system evolves independently.
 
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict, Field
+from typing import Any
+
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class _CompatModel(BaseModel):
@@ -80,6 +82,7 @@ class QQConfig(BaseChannelConfig):
     token: str = ""
     app_id: str = ""
     app_secret: str = ""
+    sandbox: bool = False
 
 
 class MatrixConfig(BaseChannelConfig):
@@ -117,3 +120,39 @@ class ChannelConfigs(_CompatModel):
 class Config(_CompatModel):
     channels: ChannelConfigs = Field(default_factory=ChannelConfigs)
     providers: ProviderConfigs = Field(default_factory=ProviderConfigs)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _project_social_platforms(cls, value: Any) -> Any:
+        """Project web-config social settings into runtime channel config.
+
+        ``web_config`` is an OpenHarness app and stores social integration
+        settings under ``social_platforms``. The channel runtime consumes the
+        compatibility ``channels`` tree, so bridge those fields here without
+        making ``web_config`` depend on any gateway-specific package.
+        """
+        if not isinstance(value, dict):
+            return value
+
+        social = value.get("social_platforms")
+        if not isinstance(social, dict):
+            return value
+
+        channels = dict(value.get("channels") or {})
+        qq_enabled = bool(social.get("qq_enabled"))
+        if qq_enabled or social.get("qq_app_id") or social.get("qq_app_secret"):
+            qq_config = dict(channels.get("qq") or {})
+            qq_config.setdefault("enabled", qq_enabled)
+            if social.get("qq_app_id"):
+                qq_config.setdefault("app_id", social.get("qq_app_id"))
+            if social.get("qq_app_secret"):
+                qq_config.setdefault("app_secret", social.get("qq_app_secret"))
+            if "qq_allow_from" in social and "allow_from" not in qq_config:
+                qq_config["allow_from"] = social.get("qq_allow_from") or []
+            if "qq_sandbox" in social and "sandbox" not in qq_config:
+                qq_config["sandbox"] = bool(social.get("qq_sandbox"))
+            channels["qq"] = qq_config
+
+        updated = dict(value)
+        updated["channels"] = channels
+        return updated

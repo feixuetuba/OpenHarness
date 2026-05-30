@@ -188,6 +188,15 @@
     .btn-danger {
       @apply px-4 py-2.5 bg-red-500/10 text-red-400 text-sm font-medium rounded-lg hover:bg-red-500/20 hover:text-red-300 transition-all duration-200 cursor-pointer border border-red-500/20;
     }
+    .test-result {
+      @apply p-3 rounded-lg mb-3 text-sm;
+    }
+    .test-success {
+      @apply bg-accent-green/10 border border-accent-green/30 text-accent-green;
+    }
+    .test-error {
+      @apply bg-red-500/10 border border-red-500/30 text-red-400;
+    }
     .status-dot {
       @apply w-2 h-2 rounded-full inline-block mr-2;
     }
@@ -2076,21 +2085,40 @@
             </div>
             <div class="form-section">
               <div class="form-item">
-                <label class="form-label">微信 API URL</label>
-                <input type="text" id="socialWechatApiUrl" class="form-input" placeholder="https://api.wechat.com" value="${data.wechat_api_url || ''}">
+                <label class="form-label">微信 App ID <span class="text-red-400">*</span></label>
+                <input type="text" id="socialWechatAppId" class="form-input" placeholder="微信开放平台App ID" value="${data.wechat_app_id || ''}">
               </div>
             </div>
             <div class="form-section">
               <div class="form-item">
-                <label class="form-label">微信 Token</label>
+                <label class="form-label">微信 App Secret <span class="text-red-400">*</span></label>
+                <input type="password" id="socialWechatAppSecret" class="form-input" placeholder="微信开放平台App Secret" value="${data.wechat_app_secret || ''}">
+              </div>
+            </div>
+            <div class="form-section">
+              <div class="form-item">
+                <label class="form-label">微信 API URL <span class="text-text-muted text-xs">(可选，默认使用官方API)</span></label>
+                <input type="text" id="socialWechatApiUrl" class="form-input" placeholder="https://api.weixin.qq.com (可选)" value="${data.wechat_api_url || ''}">
+              </div>
+            </div>
+            <div class="form-section">
+              <div class="form-item">
+                <label class="form-label">微信 Token <span class="text-text-muted text-xs">(可选，用于服务器验证)</span></label>
                 <input type="password" id="socialWechatToken" class="form-input" placeholder="微信服务器验证Token" value="${data.wechat_token || ''}">
               </div>
             </div>
             <div class="form-section">
               <div class="form-item">
-                <label class="form-label">微信 AES Key</label>
+                <label class="form-label">微信 AES Key <span class="text-text-muted text-xs">(可选，用于消息加密)</span></label>
                 <input type="password" id="socialWechatAesKey" class="form-input" placeholder="消息加密AES Key" value="${data.wechat_aes_key || ''}">
               </div>
+            </div>
+            <div class="form-section">
+              <div id="wechatTestResult" class="hidden"></div>
+              <button onclick="testSocialPlatform('wechat')" id="wechatTestBtn" class="btn-secondary">
+                <svg class="w-4 h-4 inline mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                测试连接
+              </button>
             </div>
           </div>
 
@@ -2106,21 +2134,43 @@
             </div>
             <div class="form-section">
               <div class="form-item">
-                <label class="form-label">QQ API URL</label>
-                <input type="text" id="socialQqApiUrl" class="form-input" placeholder="https://api.q.qq.com" value="${data.qq_api_url || ''}">
-              </div>
-            </div>
-            <div class="form-section">
-              <div class="form-item">
-                <label class="form-label">QQ App ID</label>
+                <label class="form-label">QQ App ID <span class="text-red-400">*</span></label>
                 <input type="text" id="socialQqAppId" class="form-input" placeholder="QQ开放平台App ID" value="${data.qq_app_id || ''}">
               </div>
             </div>
             <div class="form-section">
               <div class="form-item">
-                <label class="form-label">QQ App Secret</label>
+                <label class="form-label">QQ App Secret <span class="text-red-400">*</span></label>
                 <input type="password" id="socialQqAppSecret" class="form-input" placeholder="QQ开放平台App Secret" value="${data.qq_app_secret || ''}">
               </div>
+            </div>
+            <div class="form-section">
+              <div class="form-item">
+                <label class="form-label">QQ API URL <span class="text-text-muted text-xs">(可选，默认使用官方API)</span></label>
+                <input type="text" id="socialQqApiUrl" class="form-input" placeholder="https://bots.qq.com (可选)" value="${data.qq_api_url || ''}">
+              </div>
+            </div>
+            <div class="form-section">
+              <div class="form-item">
+                <label class="form-label">允许的 QQ 用户 <span class="text-text-muted text-xs">(逗号分隔，* 表示所有人)</span></label>
+                <input type="text" id="socialQqAllowFrom" class="form-input" placeholder="*" value="${(data.qq_allow_from || []).join(',')}">
+              </div>
+            </div>
+            <div class="form-section">
+              <div class="form-item">
+                <label class="form-label">QQ 沙箱模式</label>
+                <select id="socialQqSandbox" class="form-input">
+                  <option value="false" ${!data.qq_sandbox ? 'selected' : ''}>关闭</option>
+                  <option value="true" ${data.qq_sandbox ? 'selected' : ''}>开启</option>
+                </select>
+              </div>
+            </div>
+            <div class="form-section">
+              <div id="qqTestResult" class="hidden"></div>
+              <button onclick="testSocialPlatform('qq')" id="qqTestBtn" class="btn-secondary">
+                <svg class="w-4 h-4 inline mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                测试连接
+              </button>
             </div>
           </div>
 
@@ -2136,21 +2186,40 @@
             </div>
             <div class="form-section">
               <div class="form-item">
-                <label class="form-label">飞书 API URL</label>
-                <input type="text" id="socialFeishuApiUrl" class="form-input" placeholder="https://open.feishu.cn" value="${data.feishu_api_url || ''}">
-              </div>
-            </div>
-            <div class="form-section">
-              <div class="form-item">
-                <label class="form-label">飞书 App ID</label>
+                <label class="form-label">飞书 App ID <span class="text-red-400">*</span></label>
                 <input type="text" id="socialFeishuAppId" class="form-input" placeholder="飞书开放平台App ID" value="${data.feishu_app_id || ''}">
               </div>
             </div>
             <div class="form-section">
               <div class="form-item">
-                <label class="form-label">飞书 App Secret</label>
+                <label class="form-label">飞书 App Secret <span class="text-red-400">*</span></label>
                 <input type="password" id="socialFeishuAppSecret" class="form-input" placeholder="飞书开放平台App Secret" value="${data.feishu_app_secret || ''}">
               </div>
+            </div>
+            <div class="form-section">
+              <div class="form-item">
+                <label class="form-label">飞书 API URL <span class="text-text-muted text-xs">(可选，默认使用官方API)</span></label>
+                <input type="text" id="socialFeishuApiUrl" class="form-input" placeholder="https://open.feishu.cn (可选)" value="${data.feishu_api_url || ''}">
+              </div>
+            </div>
+            <div class="form-section">
+              <div class="form-item">
+                <label class="form-label">Encrypt Key <span class="text-text-muted text-xs">(可选，用于事件订阅加密)</span></label>
+                <input type="password" id="socialFeishuEncryptKey" class="form-input" placeholder="飞书Encrypt Key" value="${data.feishu_encrypt_key || ''}">
+              </div>
+            </div>
+            <div class="form-section">
+              <div class="form-item">
+                <label class="form-label">Verification Token <span class="text-text-muted text-xs">(可选，用于事件订阅验证)</span></label>
+                <input type="password" id="socialFeishuVerificationToken" class="form-input" placeholder="飞书Verification Token" value="${data.feishu_verification_token || ''}">
+              </div>
+            </div>
+            <div class="form-section">
+              <div id="feishuTestResult" class="hidden"></div>
+              <button onclick="testSocialPlatform('feishu')" id="feishuTestBtn" class="btn-secondary">
+                <svg class="w-4 h-4 inline mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                测试连接
+              </button>
             </div>
           </div>
 
@@ -2592,21 +2661,40 @@
             </div>
             <div class="form-section">
               <div class="form-item">
-                <label class="form-label">微信 API URL</label>
-                <input type="text" id="socialWechatApiUrl" class="form-input" placeholder="https://api.wechat.com" value="${data.wechat_api_url || ''}">
+                <label class="form-label">微信 App ID <span class="text-red-400">*</span></label>
+                <input type="text" id="socialWechatAppId" class="form-input" placeholder="微信开放平台App ID" value="${data.wechat_app_id || ''}">
               </div>
             </div>
             <div class="form-section">
               <div class="form-item">
-                <label class="form-label">微信 Token</label>
+                <label class="form-label">微信 App Secret <span class="text-red-400">*</span></label>
+                <input type="password" id="socialWechatAppSecret" class="form-input" placeholder="微信开放平台App Secret" value="${data.wechat_app_secret || ''}">
+              </div>
+            </div>
+            <div class="form-section">
+              <div class="form-item">
+                <label class="form-label">微信 API URL <span class="text-text-muted text-xs">(可选，默认使用官方API)</span></label>
+                <input type="text" id="socialWechatApiUrl" class="form-input" placeholder="https://api.weixin.qq.com (可选)" value="${data.wechat_api_url || ''}">
+              </div>
+            </div>
+            <div class="form-section">
+              <div class="form-item">
+                <label class="form-label">微信 Token <span class="text-text-muted text-xs">(可选，用于服务器验证)</span></label>
                 <input type="password" id="socialWechatToken" class="form-input" placeholder="微信服务器验证Token" value="${data.wechat_token || ''}">
               </div>
             </div>
             <div class="form-section">
               <div class="form-item">
-                <label class="form-label">微信 AES Key</label>
+                <label class="form-label">微信 AES Key <span class="text-text-muted text-xs">(可选，用于消息加密)</span></label>
                 <input type="password" id="socialWechatAesKey" class="form-input" placeholder="消息加密AES Key" value="${data.wechat_aes_key || ''}">
               </div>
+            </div>
+            <div class="form-section">
+              <div id="wechatTestResult" class="hidden"></div>
+              <button onclick="testSocialPlatform('wechat')" id="wechatTestBtn" class="btn-secondary">
+                <svg class="w-4 h-4 inline mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                测试连接
+              </button>
             </div>
           </div>
 
@@ -2622,21 +2710,43 @@
             </div>
             <div class="form-section">
               <div class="form-item">
-                <label class="form-label">QQ API URL</label>
-                <input type="text" id="socialQqApiUrl" class="form-input" placeholder="https://api.q.qq.com" value="${data.qq_api_url || ''}">
-              </div>
-            </div>
-            <div class="form-section">
-              <div class="form-item">
-                <label class="form-label">QQ App ID</label>
+                <label class="form-label">QQ App ID <span class="text-red-400">*</span></label>
                 <input type="text" id="socialQqAppId" class="form-input" placeholder="QQ开放平台App ID" value="${data.qq_app_id || ''}">
               </div>
             </div>
             <div class="form-section">
               <div class="form-item">
-                <label class="form-label">QQ App Secret</label>
+                <label class="form-label">QQ App Secret <span class="text-red-400">*</span></label>
                 <input type="password" id="socialQqAppSecret" class="form-input" placeholder="QQ开放平台App Secret" value="${data.qq_app_secret || ''}">
               </div>
+            </div>
+            <div class="form-section">
+              <div class="form-item">
+                <label class="form-label">QQ API URL <span class="text-text-muted text-xs">(可选，默认使用官方API)</span></label>
+                <input type="text" id="socialQqApiUrl" class="form-input" placeholder="https://bots.qq.com (可选)" value="${data.qq_api_url || ''}">
+              </div>
+            </div>
+            <div class="form-section">
+              <div class="form-item">
+                <label class="form-label">允许的 QQ 用户 <span class="text-text-muted text-xs">(逗号分隔，* 表示所有人)</span></label>
+                <input type="text" id="socialQqAllowFrom" class="form-input" placeholder="*" value="${(data.qq_allow_from || []).join(',')}">
+              </div>
+            </div>
+            <div class="form-section">
+              <div class="form-item">
+                <label class="form-label">QQ 沙箱模式</label>
+                <select id="socialQqSandbox" class="form-input">
+                  <option value="false" ${!data.qq_sandbox ? 'selected' : ''}>关闭</option>
+                  <option value="true" ${data.qq_sandbox ? 'selected' : ''}>开启</option>
+                </select>
+              </div>
+            </div>
+            <div class="form-section">
+              <div id="qqTestResult" class="hidden"></div>
+              <button onclick="testSocialPlatform('qq')" id="qqTestBtn" class="btn-secondary">
+                <svg class="w-4 h-4 inline mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                测试连接
+              </button>
             </div>
           </div>
 
@@ -2652,21 +2762,40 @@
             </div>
             <div class="form-section">
               <div class="form-item">
-                <label class="form-label">飞书 API URL</label>
-                <input type="text" id="socialFeishuApiUrl" class="form-input" placeholder="https://open.feishu.cn" value="${data.feishu_api_url || ''}">
-              </div>
-            </div>
-            <div class="form-section">
-              <div class="form-item">
-                <label class="form-label">飞书 App ID</label>
+                <label class="form-label">飞书 App ID <span class="text-red-400">*</span></label>
                 <input type="text" id="socialFeishuAppId" class="form-input" placeholder="飞书开放平台App ID" value="${data.feishu_app_id || ''}">
               </div>
             </div>
             <div class="form-section">
               <div class="form-item">
-                <label class="form-label">飞书 App Secret</label>
+                <label class="form-label">飞书 App Secret <span class="text-red-400">*</span></label>
                 <input type="password" id="socialFeishuAppSecret" class="form-input" placeholder="飞书开放平台App Secret" value="${data.feishu_app_secret || ''}">
               </div>
+            </div>
+            <div class="form-section">
+              <div class="form-item">
+                <label class="form-label">飞书 API URL <span class="text-text-muted text-xs">(可选，默认使用官方API)</span></label>
+                <input type="text" id="socialFeishuApiUrl" class="form-input" placeholder="https://open.feishu.cn (可选)" value="${data.feishu_api_url || ''}">
+              </div>
+            </div>
+            <div class="form-section">
+              <div class="form-item">
+                <label class="form-label">Encrypt Key <span class="text-text-muted text-xs">(可选，用于事件订阅加密)</span></label>
+                <input type="password" id="socialFeishuEncryptKey" class="form-input" placeholder="飞书Encrypt Key" value="${data.feishu_encrypt_key || ''}">
+              </div>
+            </div>
+            <div class="form-section">
+              <div class="form-item">
+                <label class="form-label">Verification Token <span class="text-text-muted text-xs">(可选，用于事件订阅验证)</span></label>
+                <input type="password" id="socialFeishuVerificationToken" class="form-input" placeholder="飞书Verification Token" value="${data.feishu_verification_token || ''}">
+              </div>
+            </div>
+            <div class="form-section">
+              <div id="feishuTestResult" class="hidden"></div>
+              <button onclick="testSocialPlatform('feishu')" id="feishuTestBtn" class="btn-secondary">
+                <svg class="w-4 h-4 inline mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                测试连接
+              </button>
             </div>
           </div>
 
@@ -2691,16 +2820,22 @@
       const data = {
         wechat_enabled: document.getElementById('socialWechatEnabled').value === 'true',
         wechat_api_url: document.getElementById('socialWechatApiUrl').value,
+        wechat_app_id: document.getElementById('socialWechatAppId').value,
+        wechat_app_secret: document.getElementById('socialWechatAppSecret').value,
         wechat_token: document.getElementById('socialWechatToken').value,
         wechat_aes_key: document.getElementById('socialWechatAesKey').value,
         qq_enabled: document.getElementById('socialQqEnabled').value === 'true',
         qq_api_url: document.getElementById('socialQqApiUrl').value,
         qq_app_id: document.getElementById('socialQqAppId').value,
         qq_app_secret: document.getElementById('socialQqAppSecret').value,
+        qq_allow_from: document.getElementById('socialQqAllowFrom').value.split(',').map(s => s.trim()).filter(Boolean),
+        qq_sandbox: document.getElementById('socialQqSandbox').value === 'true',
         feishu_enabled: document.getElementById('socialFeishuEnabled').value === 'true',
         feishu_api_url: document.getElementById('socialFeishuApiUrl').value,
         feishu_app_id: document.getElementById('socialFeishuAppId').value,
-        feishu_app_secret: document.getElementById('socialFeishuAppSecret').value
+        feishu_app_secret: document.getElementById('socialFeishuAppSecret').value,
+        feishu_encrypt_key: document.getElementById('socialFeishuEncryptKey').value,
+        feishu_verification_token: document.getElementById('socialFeishuVerificationToken').value
       };
       try {
         await fetch('/api/social-platforms', {
@@ -2711,6 +2846,109 @@
         alert('社交设置已保存');
       } catch (e) {
         alert('保存失败: ' + e.message);
+      }
+    }
+
+    async function testSocialPlatform(platformName) {
+      const btn = document.getElementById(platformName + 'TestBtn');
+      const resultDiv = document.getElementById(platformName + 'TestResult');
+      
+      btn.disabled = true;
+      btn.innerHTML = '<svg class="w-4 h-4 inline mr-1 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg> 测试中...';
+      resultDiv.className = 'test-result';
+      resultDiv.innerHTML = '';
+      
+      let testData = {};
+      if (platformName === 'wechat') {
+        testData = {
+          enabled: document.getElementById('socialWechatEnabled').value === 'true',
+          api_url: document.getElementById('socialWechatApiUrl').value,
+          app_id: document.getElementById('socialWechatAppId').value,
+          app_secret: document.getElementById('socialWechatAppSecret').value,
+          token: document.getElementById('socialWechatToken').value,
+          aes_key: document.getElementById('socialWechatAesKey').value
+        };
+      } else if (platformName === 'qq') {
+        testData = {
+          enabled: document.getElementById('socialQqEnabled').value === 'true',
+          api_url: document.getElementById('socialQqApiUrl').value,
+          app_id: document.getElementById('socialQqAppId').value,
+          app_secret: document.getElementById('socialQqAppSecret').value,
+          allow_from: document.getElementById('socialQqAllowFrom').value.split(',').map(s => s.trim()).filter(Boolean),
+          sandbox: document.getElementById('socialQqSandbox').value === 'true'
+        };
+      } else if (platformName === 'feishu') {
+        testData = {
+          enabled: document.getElementById('socialFeishuEnabled').value === 'true',
+          api_url: document.getElementById('socialFeishuApiUrl').value,
+          app_id: document.getElementById('socialFeishuAppId').value,
+          app_secret: document.getElementById('socialFeishuAppSecret').value,
+          encrypt_key: document.getElementById('socialFeishuEncryptKey').value,
+          verification_token: document.getElementById('socialFeishuVerificationToken').value,
+          domain: document.getElementById('socialFeishuApiUrl').value || 'https://open.feishu.cn'
+        };
+      }
+      
+      try {
+        const res = await fetch(`/api/social-platforms/${platformName}/test`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(testData)
+        });
+        
+        const result = await res.json();
+        
+        if (result.success) {
+          resultDiv.className = 'test-result test-success';
+          let detailsHtml = '';
+          if (result.details && Object.keys(result.details).length > 0) {
+            const details = result.details;
+            detailsHtml = '<div class="mt-2 pt-2 border-t border-accent-green/20">';
+            detailsHtml += '<div class="text-xs text-text-muted mb-1">详细信息：</div>';
+            if (details.app_id) {
+              detailsHtml += `<div class="text-xs text-text-muted">• App ID: ${details.app_id}</div>`;
+            }
+            if (details.expires_in) {
+              detailsHtml += `<div class="text-xs text-text-muted">• Token有效期: ${details.expires_in}秒</div>`;
+            }
+            if (details.access_token) {
+              detailsHtml += `<div class="text-xs text-text-muted">• 获取Token成功</div>`;
+            }
+            detailsHtml += '</div>';
+          }
+          
+          resultDiv.innerHTML = `
+            <div class="flex items-start gap-2">
+              <svg class="w-5 h-5 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+              <div class="flex-1">
+                <div class="text-sm text-accent-green font-medium">${result.message}</div>
+                ${detailsHtml}
+              </div>
+            </div>
+          `;
+        } else {
+          resultDiv.className = 'test-result test-error';
+          resultDiv.innerHTML = `
+            <div class="flex items-start gap-2">
+              <svg class="w-5 h-5 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+              <div class="flex-1">
+                <div class="text-sm text-red-400 font-medium">${result.message}</div>
+                ${result.error ? `<div class="text-xs text-text-muted mt-1">${result.error}</div>` : ''}
+              </div>
+            </div>
+          `;
+        }
+      } catch (e) {
+        resultDiv.className = 'test-result test-error';
+        resultDiv.innerHTML = `
+          <div class="flex items-center gap-2 text-sm text-red-400">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+            <span>测试失败: ${e.message}</span>
+          </div>
+        `;
+      } finally {
+        btn.disabled = false;
+        btn.innerHTML = '<svg class="w-4 h-4 inline mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg> 测试连接';
       }
     }
 

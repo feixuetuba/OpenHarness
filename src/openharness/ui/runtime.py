@@ -190,6 +190,15 @@ class RuntimeBundle:
         return "\n".join(lines)
 
 
+def _is_local_openai_base_url(base_url: str | None) -> bool:
+    if not base_url:
+        return False
+    from urllib.parse import urlsplit
+
+    host = (urlsplit(base_url).hostname or "").lower()
+    return host in {"127.0.0.1", "localhost", "::1"}
+
+
 def _resolve_api_client_from_settings(settings) -> SupportsStreamingMessages:
     """Build the appropriate API client for the resolved settings."""
     # Ensure profile fields (base_url, model, api_format) are projected to settings
@@ -225,6 +234,12 @@ def _resolve_api_client_from_settings(settings) -> SupportsStreamingMessages:
             auth_token_resolver=lambda: settings.resolve_auth().value,
         )
     if settings.api_format in ("openai", "openai_compat"):
+        if _is_local_openai_base_url(settings.base_url) and not settings.api_key:
+            return OpenAICompatibleClient(
+                api_key="openharness-local",
+                base_url=settings.base_url,
+                timeout=settings.timeout,
+            )
         auth = _safe_resolve_auth()
         return OpenAICompatibleClient(
             api_key=auth.value,

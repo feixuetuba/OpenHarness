@@ -246,7 +246,9 @@ class ChannelManager:
         return {
             name: {
                 "enabled": True,
-                "running": channel.is_running
+                "running": channel.is_running,
+                "online": getattr(channel, "online", None),
+                "last_error": getattr(channel, "last_error", None),
             }
             for name, channel in self.channels.items()
         }

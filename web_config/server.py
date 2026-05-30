@@ -1,30 +1,21 @@
 """CLI entry point for the OpenHarness Web Config server."""
 import os
 import argparse
+import logging
 import sys
-from pathlib import Path
 
 import uvicorn
 
 MY_DIR=os.path.dirname(os.path.abspath(__file__))
-HARNESS_DIR=os.path.realpath(MY_DIR+"/../src")
-sys.path.insert(0,HARNESS_DIR)
-
-# Ensure config directory is writable (use project-local .openharness if home is read-only)
-config_dir = os.environ.get("OPENHARNESS_CONFIG_DIR")
-if config_dir is None:
-    project_config = Path(MY_DIR).parent / ".openharness"
-    try:
-        project_config.mkdir(parents=True, exist_ok=True)
-        test_file = project_config / ".write_test"
-        test_file.touch()
-        test_file.unlink()
-        os.environ["OPENHARNESS_CONFIG_DIR"] = str(project_config)
-    except OSError:
-        pass
+ROOT_DIR=os.path.realpath(MY_DIR+"/..")
+HARNESS_DIR=os.path.join(ROOT_DIR, "src")
+for path in (ROOT_DIR, HARNESS_DIR):
+    if path not in sys.path:
+        sys.path.insert(0, path)
 
 
 def main():
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(levelname)s %(message)s")
     parser = argparse.ArgumentParser(description="OpenHarness Web Config Manager")
     parser.add_argument("--host", default="0.0.0.0", help="Host to bind to (default: 0.0.0.0)")
     parser.add_argument("--port", type=int, default=8899, help="Port to bind to (default: 8899)")
@@ -34,6 +25,9 @@ def main():
     host_label = args.host if args.host != "0.0.0.0" else "localhost"
     print(f"Starting OpenHarness Web Config Manager...")
     print(f"  URL: http://{host_label}:{args.port}")
+    from openharness.config.paths import get_config_file_path
+
+    print(f"  Settings: {get_config_file_path()}")
     print()
 
     uvicorn.run(

@@ -568,6 +568,8 @@ class SocialPlatformConfig(BaseModel):
     qq_api_url: str = ""
     qq_app_id: str = ""
     qq_app_secret: str = ""
+    qq_allow_from: list[str] = Field(default_factory=list)
+    qq_sandbox: bool = False
     
     feishu_enabled: bool = False
     feishu_api_url: str = ""
