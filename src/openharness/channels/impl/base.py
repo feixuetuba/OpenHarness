@@ -52,6 +52,7 @@ class BaseChannel(ABC):
         self.config = config
         self.bus = bus
         self._running = False
+        self.sessions: dict[str, dict[str, Any]] = {}
 
     @abstractmethod
     async def start(self) -> None:
@@ -122,6 +123,28 @@ class BaseChannel(ABC):
                 sender_id, self.name,
             )
             return
+
+        logger.info("BaseChannel._handle_message: channel=%s, sender_id=%s, chat_id=%s, content=%s", self.name, sender_id, chat_id, content[:100] if content else "")
+
+        key = session_key or sender_id
+        sender_name = str((metadata or {}).get("sender_name") or sender_id)
+        if key not in self.sessions:
+            self.sessions[key] = {
+                "sender_id": sender_id,
+                "sender_name": sender_name,
+                "last_message": content,
+                "message_count": 0,
+                "messages": [],
+            }
+        session = self.sessions[key]
+        session["sender_name"] = sender_name
+        session["last_message"] = content
+        session["message_count"] += 1
+        session["messages"].append({
+            "role": "user",
+            "content": content,
+            "timestamp": __import__("time").time(),
+        })
 
         msg = InboundMessage(
             channel=self.name,

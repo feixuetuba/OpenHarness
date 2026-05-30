@@ -15,7 +15,11 @@ for path in (project_root, src_root):
 
 
 def main():
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(levelname)s %(message)s")
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(name)s] %(levelname)s %(message)s",
+        force=True,
+    )
     parser = argparse.ArgumentParser(description="OpenHarness Web Config Manager")
     parser.add_argument("--host", default="0.0.0.0", help="Host to bind to (default: 0.0.0.0)")
     parser.add_argument("--port", type=int, default=8899, help="Port to bind to (default: 8899)")
@@ -40,6 +44,7 @@ def main():
         host=args.host,
         port=args.port,
         reload=args.reload,
+        log_config=None,
     )
 
 

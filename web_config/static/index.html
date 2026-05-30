@@ -342,7 +342,7 @@
           <button onclick="switchInstallTab('http')" id="installTabHttp" class="install-tab-btn" type="button" role="tab" aria-selected="false">HTTP</button>
           <button onclick="switchInstallTab('zip')" id="installTabZip" class="install-tab-btn" type="button" role="tab" aria-selected="false">ZIP</button>
         </div>
-        
+
         <!-- Git Install Form -->
         <div id="installFormGit" class="space-y-4">
           <div class="form-item">
@@ -370,7 +370,7 @@
             <input type="text" id="skillInstallHttpName" class="form-input" placeholder="留空则自动识别">
           </div>
         </div>
-        
+
         <!-- ZIP Upload Form -->
         <div id="installFormZip" class="hidden space-y-4">
           <div class="form-item">
@@ -491,6 +491,13 @@
       <button id="navChat" onclick="switchPrimaryNav('chat')" class="nav-icon-btn" title="运行面/聊天">
         <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/>
+        </svg>
+      </button>
+      <button id="navBots" onclick="switchPrimaryNav('bots')" class="nav-icon-btn" title="机器人管理">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 2a2 2 0 012 2v2h2a2 2 0 012 2v10a2 2 0 01-2 2H8a2 2 0 01-2-2V8a2 2 0 012-2h2V4a2 2 0 012-2z"/>
+          <circle cx="9" cy="12" r="1" fill="currentColor"/>
+          <circle cx="15" cy="12" r="1" fill="currentColor"/>
         </svg>
       </button>
     </nav>
@@ -1064,6 +1071,48 @@
         </div>
       </div>
 
+      <!-- Bots Workspace -->
+      <div id="workspaceBots" class="hidden h-full">
+        <div class="h-full flex">
+          <!-- Bot List Sidebar (8%) -->
+          <div class="w-[8%] min-w-[120px] border-r border-dark-border flex flex-col bg-dark-bg-secondary/50">
+            <div class="px-4 py-3 border-b border-dark-border">
+              <h3 class="text-xs font-semibold text-text-muted uppercase tracking-wider">机器人</h3>
+            </div>
+            <div id="botList" class="flex-1 overflow-y-auto p-2 space-y-1">
+              <div class="text-sm text-text-muted p-4 text-center">加载中...</div>
+            </div>
+          </div>
+          <!-- User List (12%) -->
+          <div class="w-[12%] min-w-[140px] border-r border-dark-border flex flex-col bg-dark-bg-secondary/30">
+            <div class="px-4 py-3 border-b border-dark-border">
+              <h3 class="text-xs font-semibold text-text-muted uppercase tracking-wider">用户</h3>
+            </div>
+            <div id="botUserList" class="flex-1 overflow-y-auto p-2 space-y-1">
+              <div class="text-sm text-text-muted p-4 text-center">选择一个机器人</div>
+            </div>
+          </div>
+          <!-- Chat Area (55%) -->
+          <div class="flex-1 flex flex-col">
+            <div id="botChatHeader" class="px-4 py-3 border-b border-dark-border flex items-center justify-between">
+              <div>
+                <h3 id="botChatTitle" class="text-sm font-semibold text-text-primary">选择聊天</h3>
+                <p id="botChatSubtitle" class="text-xs text-text-muted">选择机器人和用户查看聊天内容</p>
+              </div>
+            </div>
+            <div id="botChatMessages" class="flex-1 overflow-y-auto p-4 space-y-3">
+              <div class="text-center text-text-muted text-sm py-10">
+                <svg class="w-12 h-12 mx-auto mb-3 text-text-muted/30" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/>
+                </svg>
+                <p class="font-medium">选择聊天</p>
+                <p class="text-xs mt-1 text-text-muted/60">选择机器人和用户查看聊天内容</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <!-- Chat Workspace (Dual Column) -->
       <div id="workspaceChat" class="h-full">
         <div class="h-full flex">
@@ -1129,13 +1178,19 @@
       currentNav = nav;
       document.getElementById('navSettings').classList.toggle('active', nav === 'settings');
       document.getElementById('navChat').classList.toggle('active', nav === 'chat');
+      document.getElementById('navBots').classList.toggle('active', nav === 'bots');
       document.getElementById('subMenuSettings').classList.toggle('hidden', nav !== 'settings');
       document.getElementById('subMenuChat').classList.toggle('hidden', nav !== 'chat');
+      document.getElementById('subSidebar').classList.toggle('hidden', nav === 'bots');
       document.getElementById('workspaceManagement').classList.toggle('hidden', nav !== 'settings');
       document.getElementById('workspaceChat').classList.toggle('hidden', nav !== 'chat');
+      document.getElementById('workspaceBots').classList.toggle('hidden', nav !== 'bots');
       if (nav === 'chat') {
         loadChatHistory();
         applyTracePanelState();
+      }
+      if (nav === 'bots') {
+        loadBotChannels();
       }
     }
 
@@ -1149,7 +1204,7 @@
       const content = document.getElementById('tracePanelContent');
       const icon = document.getElementById('tracePanelToggleIcon');
       const toggleBtnIcon = document.getElementById('tracePanelToggleBtnIcon');
-      
+
       if (tracePanelCollapsed) {
         panel.style.width = '0';
         panel.style.minWidth = '0';
@@ -1199,13 +1254,13 @@
         const res = await fetch('/api/settings');
         const data = await res.json();
         activeProfileName = data.active_profile;
-        
+
         // Load agents
         agents = data.agents || [];
         activeAgentId = data.active_agent_id;
         const activeAgent = agents.find(a => a.id === activeAgentId);
         document.getElementById('agentName').textContent = activeAgent?.name || data.active_profile || 'Default Agent';
-        
+
         // Load current profile settings
         if (data.profiles && data.profiles.length > 0) {
           const activeProfile = data.profiles.find(p => p.active);
@@ -1214,7 +1269,7 @@
             document.getElementById('profileBaseUrl').value = activeProfile.base_url || '';
           }
         }
-        
+
         document.getElementById('memoryEnabled').value = data.memory_enabled.toString();
         document.getElementById('memoryMaxFiles').value = data.memory_max_files;
         renderProfiles(data.profiles);
@@ -1477,7 +1532,7 @@
     function editAgent(id) {
       const agent = agents.find(a => a.id === id);
       if (!agent) return;
-      
+
       editingAgentId = id;
       document.getElementById('agentFormTitle').textContent = '编辑 Agent';
       document.getElementById('newAgentId').value = agent.id;
@@ -1623,8 +1678,8 @@
         renderSkillsList(allSkills);
         return;
       }
-      const filtered = allSkills.filter(s => 
-        s.name.toLowerCase().includes(search) || 
+      const filtered = allSkills.filter(s =>
+        s.name.toLowerCase().includes(search) ||
         (s.description && s.description.toLowerCase().includes(search)) ||
         (s.source && s.source.toLowerCase().includes(search))
       );
@@ -1956,8 +2011,8 @@
         renderMemoryEntries(memoryEntries);
         return;
       }
-      const filtered = memoryEntries.filter(e => 
-        (e.title && e.title.toLowerCase().includes(search)) || 
+      const filtered = memoryEntries.filter(e =>
+        (e.title && e.title.toLowerCase().includes(search)) ||
         (e.description && e.description.toLowerCase().includes(search)) ||
         (e.id && e.id.toLowerCase().includes(search))
       );
@@ -2500,7 +2555,7 @@
       try {
         const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/user-messages`);
         const data = await res.json();
-        
+
         if (data.error || !data.user_messages || data.user_messages.length === 0) {
           alert('该会话中没有用户消息，无法派生');
           return;
@@ -2602,7 +2657,7 @@
         return;
       }
       container.innerHTML = tasks.map(t => {
-        const statusColor = t.status === 'completed' ? 'bg-accent-green/10 text-accent-green' : 
+        const statusColor = t.status === 'completed' ? 'bg-accent-green/10 text-accent-green' :
                            t.status === 'running' ? 'bg-accent-blue/10 text-accent-blue' :
                            t.status === 'failed' ? 'bg-red-500/10 text-red-400' : 'bg-text-muted/10 text-text-muted';
         return `
@@ -2811,7 +2866,7 @@
     function switchSocialTab(tab) {
       document.querySelectorAll('.social-tab-btn').forEach(btn => btn.classList.remove('active'));
       document.querySelectorAll('.social-tab-content').forEach(content => content.style.display = 'none');
-      
+
       document.getElementById('socialTab' + tab.charAt(0).toUpperCase() + tab.slice(1)).classList.add('active');
       document.getElementById('socialTabContent' + tab.charAt(0).toUpperCase() + tab.slice(1)).style.display = 'block';
     }
@@ -2852,12 +2907,12 @@
     async function testSocialPlatform(platformName) {
       const btn = document.getElementById(platformName + 'TestBtn');
       const resultDiv = document.getElementById(platformName + 'TestResult');
-      
+
       btn.disabled = true;
       btn.innerHTML = '<svg class="w-4 h-4 inline mr-1 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg> 测试中...';
       resultDiv.className = 'test-result';
       resultDiv.innerHTML = '';
-      
+
       let testData = {};
       if (platformName === 'wechat') {
         testData = {
@@ -2888,16 +2943,16 @@
           domain: document.getElementById('socialFeishuApiUrl').value || 'https://open.feishu.cn'
         };
       }
-      
+
       try {
         const res = await fetch(`/api/social-platforms/${platformName}/test`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(testData)
         });
-        
+
         const result = await res.json();
-        
+
         if (result.success) {
           resultDiv.className = 'test-result test-success';
           let detailsHtml = '';
@@ -2916,7 +2971,7 @@
             }
             detailsHtml += '</div>';
           }
-          
+
           resultDiv.innerHTML = `
             <div class="flex items-start gap-2">
               <svg class="w-5 h-5 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
@@ -3007,7 +3062,7 @@
       try {
         const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/user-messages`);
         const data = await res.json();
-        
+
         if (data.error || !data.user_messages || data.user_messages.length === 0) {
           alert('该会话中没有用户消息，无法派生');
           return;
@@ -3343,13 +3398,13 @@
       const customUrlInput = document.getElementById('webSearchCustomUrl');
       const sdkSection = document.getElementById('webSearchSdkSection');
       const baseUrlSection = document.getElementById('webSearchBaseUrlSection');
-      
+
       apiKeyInput.placeholder = '输入搜索 API Key（如需要）';
       baseUrlInput.placeholder = 'https://api.example.com/search';
       customUrlInput.parentElement.style.display = 'none';
       sdkSection.style.display = 'block';
       baseUrlSection.style.display = 'block';
-      
+
       switch(provider) {
         case 'duckduckgo':
           apiKeyInput.placeholder = 'DuckDuckGo 无需 API Key';
@@ -3382,7 +3437,7 @@
       const useSdk = document.getElementById('webSearchUseSdk').checked;
       const baseUrl = document.getElementById('webSearchBaseUrl').value;
       const maxResults = parseInt(document.getElementById('webSearchMaxResults').value) || 5;
-      
+
       try {
         const res = await fetch('/api/search-api', {
           method: 'POST',
@@ -3396,7 +3451,7 @@
             max_results: maxResults
           })
         });
-        
+
         if (res.ok) {
           showNotification('Web Search 设置已保存', 'success');
         } else {
@@ -3411,14 +3466,14 @@
       const resultDiv = document.getElementById('webSearchTestResult');
       resultDiv.classList.remove('hidden');
       resultDiv.innerHTML = '<div class="text-text-muted">测试中...</div>';
-      
+
       try {
         const res = await fetch('/api/search-api/test', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ query: 'OpenHarness AI agent' })
         });
-        
+
         const data = await res.json();
         if (res.ok) {
           resultDiv.innerHTML = `
@@ -3445,12 +3500,12 @@
         error: 'bg-red-500/10 text-red-400 border-red-500/20',
         info: 'bg-accent-blue/10 text-accent-blue border-accent-blue/20'
       };
-      
+
       const notification = document.createElement('div');
       notification.className = `fixed top-20 right-5 z-50 px-4 py-3 rounded-lg border ${colors[type]} animate-slide-up`;
       notification.textContent = message;
       document.body.appendChild(notification);
-      
+
       setTimeout(() => {
         notification.style.opacity = '0';
         notification.style.transition = 'opacity 0.3s';
@@ -3460,6 +3515,384 @@
 
     function hotReload() {
       location.reload();
+    }
+
+    async function loadBotChannels() {
+      try {
+        const res = await fetch('/api/bots/channels');
+        const data = await res.json();
+        allBotChannels = data.channels || [];
+        renderBotList(allBotChannels);
+      } catch (e) {
+        console.error('Failed to load bot channels:', e);
+        document.getElementById('botList').innerHTML = '<div class="text-sm text-red-400 p-4 text-center">加载失败</div>';
+      }
+    }
+
+    let allBotChannels = [];
+    let selectedBotChannel = null;
+    let selectedBotUser = null;
+
+    function renderBotList(channels) {
+      const container = document.getElementById('botList');
+      if (!channels || channels.length === 0) {
+        container.innerHTML = '<div class="text-sm text-text-muted p-4 text-center">暂无启用的机器人</div>';
+        return;
+      }
+      container.innerHTML = channels.map(channel => `
+        <div class="flex items-center justify-between p-2 rounded-lg cursor-pointer transition-colors ${selectedBotChannel === channel.name ? 'bg-accent-purple/10' : 'hover:bg-dark-bg-secondary'}" onclick="selectBotChannel('${channel.name}')">
+          <div class="flex items-center gap-2 min-w-0 flex-1">
+            <div class="w-8 h-8 rounded-lg bg-accent-purple/10 flex items-center justify-center flex-shrink-0">
+              <svg class="w-4 h-4 text-accent-purple" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 2a2 2 0 012 2v2h2a2 2 0 012 2v10a2 2 0 01-2 2H8a2 2 0 01-2-2V8a2 2 0 012-2h2V4a2 2 0 012-2z"/>
+                <circle cx="9" cy="12" r="1" fill="currentColor"/>
+                <circle cx="15" cy="12" r="1" fill="currentColor"/>
+              </svg>
+            </div>
+            <div class="min-w-0">
+              <div class="text-sm font-medium text-text-primary truncate">${channel.display_name || channel.name}</div>
+              <div class="text-xs text-text-muted">${channel.type}</div>
+            </div>
+          </div>
+          <button onclick="event.stopPropagation(); showBotConfig('${channel.name}')" class="p-1.5 hover:bg-dark-bg rounded transition-colors flex-shrink-0" title="配置">
+            <svg class="w-4 h-4 text-text-muted" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+          </button>
+        </div>
+      `).join('');
+    }
+
+    function selectBotChannel(channelName) {
+      selectedBotChannel = channelName;
+      selectedBotUser = null;
+      renderBotList(allBotChannels);
+      const channel = allBotChannels.find(c => c.name === channelName);
+      renderBotUsers(channel ? channel.sessions || [] : []);
+      document.getElementById('botChatMessages').innerHTML = `
+        <div class="text-center text-text-muted text-sm py-10">
+          <svg class="w-12 h-12 mx-auto mb-3 text-text-muted/30" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/>
+          </svg>
+          <p class="font-medium">选择用户</p>
+          <p class="text-xs mt-1 text-text-muted/60">点击左侧用户查看聊天内容</p>
+        </div>
+      `;
+    }
+
+    function renderBotUsers(sessions) {
+      const container = document.getElementById('botUserList');
+      if (!sessions || sessions.length === 0) {
+        container.innerHTML = '<div class="text-sm text-text-muted p-4 text-center">暂无用户</div>';
+        return;
+      }
+      container.innerHTML = sessions.map(session => `
+        <div class="p-2 rounded-lg cursor-pointer transition-colors ${selectedBotUser === session.sender_id ? 'bg-accent-green/10' : 'hover:bg-dark-bg-secondary'}" onclick="selectBotUser('${session.sender_id}')">
+          <div class="text-sm font-medium text-text-primary truncate">${escapeHtml(session.sender_name || session.sender_id)}</div>
+          <div class="text-xs text-text-muted truncate">${escapeHtml(session.last_message || '')}</div>
+        </div>
+      `).join('');
+    }
+
+    function selectBotUser(senderId) {
+      selectedBotUser = senderId;
+      const channel = allBotChannels.find(c => c.name === selectedBotChannel);
+      renderBotUsers(channel ? channel.sessions || [] : []);
+      loadBotChat(selectedBotChannel, senderId);
+    }
+
+    async function loadBotChat(channelName, senderId) {
+      try {
+        const res = await fetch(`/api/bots/${channelName}/chat/${senderId}`);
+        const data = await res.json();
+        renderBotChatMessages(channelName, senderId, data.messages || []);
+      } catch (e) {
+        console.error('Failed to load bot chat:', e);
+        document.getElementById('botChatMessages').innerHTML = '<div class="text-sm text-red-400 p-4 text-center">加载失败</div>';
+      }
+    }
+
+    function renderBotChatMessages(channelName, senderId, messages) {
+      const channel = allBotChannels.find(c => c.name === channelName);
+      const sender = channel ? (channel.sessions || []).find(s => s.sender_id === senderId) : null;
+      const senderName = sender ? (sender.sender_name || senderId) : senderId;
+
+      document.getElementById('botChatTitle').textContent = `${channelName} - ${senderName}`;
+      document.getElementById('botChatSubtitle').textContent = `${messages.length} 条消息`;
+
+      const container = document.getElementById('botChatMessages');
+      if (!messages || messages.length === 0) {
+        container.innerHTML = `
+          <div class="text-center text-text-muted text-sm py-10">
+            <p class="font-medium">暂无聊天记录</p>
+          </div>
+        `;
+        return;
+      }
+
+      container.innerHTML = messages.map(msg => {
+        if (msg.role === 'user') {
+          return `
+            <div class="flex justify-end">
+              <div class="max-w-[70%] px-4 py-2 rounded-lg bg-accent-green/20 text-text-primary">
+                <div class="text-xs text-text-muted mb-1 text-right">用户</div>
+                <div class="text-sm whitespace-pre-wrap">${escapeHtml(msg.content)}</div>
+              </div>
+            </div>
+          `;
+        } else {
+          const agentName = msg.agent_name || 'Agent';
+          return `
+            <div class="flex justify-start">
+              <div class="max-w-[70%] px-4 py-2 rounded-lg bg-dark-bg-secondary text-text-primary">
+                <div class="text-xs text-accent-purple mb-1">Agent-${escapeHtml(agentName)}</div>
+                <div class="text-sm whitespace-pre-wrap">${escapeHtml(msg.content)}</div>
+              </div>
+            </div>
+          `;
+        }
+      }).join('');
+
+      container.scrollTop = container.scrollHeight;
+    }
+
+    function showBotConfig(channelName) {
+      const channel = allBotChannels.find(c => c.name === channelName);
+      if (!channel) return;
+
+      const modal = document.createElement('div');
+      modal.className = 'fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4';
+      modal.onclick = (e) => { if (e.target === modal) modal.remove(); };
+
+      const type = channel.type || channelName;
+      const configFields = getBotConfigFields(type, channel);
+
+      modal.innerHTML = `
+        <div class="bg-dark-card border border-dark-border rounded-xl w-full max-w-lg max-h-[80vh] flex flex-col shadow-soft">
+          <div class="flex items-center justify-between p-5 border-b border-dark-border">
+            <div>
+              <h3 class="text-base font-semibold text-text-primary">${channel.display_name || channelName} 配置</h3>
+              <p class="text-xs text-text-muted mt-1">${type}</p>
+            </div>
+            <button onclick="this.closest('.fixed').remove()" class="nav-icon-btn">
+              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+            </button>
+          </div>
+          <div class="flex-1 overflow-y-auto p-5 space-y-4">
+            <div class="form-item">
+              <label class="form-label">分配 Agent</label>
+              <select id="botConfigAgent" class="form-input">
+                <option value="">不分配（使用默认）</option>
+              </select>
+            </div>
+            ${configFields}
+          </div>
+          <div class="p-5 border-t border-dark-border flex justify-end gap-2">
+            <button onclick="this.closest('.fixed').remove()" class="btn-secondary">取消</button>
+            <button onclick="saveBotConfig('${channelName}')" class="btn-primary">保存</button>
+          </div>
+        </div>
+      `;
+
+      document.body.appendChild(modal);
+
+      loadAgentsForBotConfig(channelName);
+    }
+
+    async function loadAgentsForBotConfig(channelName) {
+      try {
+        const resp = await fetch('/api/agents');
+        const data = await resp.json();
+        const agents = data.agents || [];
+        const channel = allBotChannels.find(c => c.name === channelName);
+        const currentAgentId = channel ? channel.agent_id : null;
+
+        const select = document.getElementById('botConfigAgent');
+        if (!select) return;
+
+        agents.forEach(agent => {
+          const option = document.createElement('option');
+          option.value = agent.id;
+          option.textContent = agent.name || agent.id;
+          if (agent.id === currentAgentId) {
+            option.selected = true;
+          }
+          select.appendChild(option);
+        });
+      } catch (e) {
+        console.error('Failed to load agents:', e);
+      }
+    }
+
+    function getBotConfigFields(type, channel) {
+      const fields = [];
+
+      if (type === 'qq') {
+        fields.push(`
+          <div class="form-item">
+            <label class="form-label">App ID <span class="text-red-400">*</span></label>
+            <input type="text" id="botConfigAppId" class="form-input" placeholder="QQ开放平台App ID" value="${channel.app_id || ''}">
+          </div>
+        `);
+        fields.push(`
+          <div class="form-item">
+            <label class="form-label">App Secret <span class="text-red-400">*</span></label>
+            <input type="password" id="botConfigAppSecret" class="form-input" placeholder="QQ开放平台App Secret" value="${channel.app_secret || ''}">
+          </div>
+        `);
+        fields.push(`
+          <div class="form-item">
+            <label class="form-label">API URL <span class="text-text-muted text-xs">(可选)</span></label>
+            <input type="text" id="botConfigApiUrl" class="form-input" placeholder="https://bots.qq.com" value="${channel.api_url || ''}">
+          </div>
+        `);
+        fields.push(`
+          <div class="form-item">
+            <label class="form-label">允许的用户 <span class="text-text-muted text-xs">(逗号分隔，* 表示所有人)</span></label>
+            <input type="text" id="botConfigAllowFrom" class="form-input" placeholder="*" value="${(channel.allow_from || []).join(',')}">
+          </div>
+        `);
+        fields.push(`
+          <div class="form-item">
+            <label class="form-label">沙箱模式</label>
+            <select id="botConfigSandbox" class="form-input">
+              <option value="false" ${!channel.sandbox ? 'selected' : ''}>关闭</option>
+              <option value="true" ${channel.sandbox ? 'selected' : ''}>开启</option>
+            </select>
+          </div>
+        `);
+      } else if (type === 'wechat') {
+        fields.push(`
+          <div class="form-item">
+            <label class="form-label">App ID <span class="text-red-400">*</span></label>
+            <input type="text" id="botConfigAppId" class="form-input" placeholder="微信开放平台App ID" value="${channel.app_id || ''}">
+          </div>
+        `);
+        fields.push(`
+          <div class="form-item">
+            <label class="form-label">App Secret <span class="text-red-400">*</span></label>
+            <input type="password" id="botConfigAppSecret" class="form-input" placeholder="微信开放平台App Secret" value="${channel.app_secret || ''}">
+          </div>
+        `);
+        fields.push(`
+          <div class="form-item">
+            <label class="form-label">Token <span class="text-text-muted text-xs">(可选)</span></label>
+            <input type="password" id="botConfigToken" class="form-input" placeholder="微信服务器验证Token" value="${channel.token || ''}">
+          </div>
+        `);
+        fields.push(`
+          <div class="form-item">
+            <label class="form-label">AES Key <span class="text-text-muted text-xs">(可选)</span></label>
+            <input type="password" id="botConfigAesKey" class="form-input" placeholder="微信消息加密AES Key" value="${channel.aes_key || ''}">
+          </div>
+        `);
+        fields.push(`
+          <div class="form-item">
+            <label class="form-label">API URL <span class="text-text-muted text-xs">(可选)</span></label>
+            <input type="text" id="botConfigApiUrl" class="form-input" placeholder="https://api.weixin.qq.com" value="${channel.api_url || ''}">
+          </div>
+        `);
+      } else if (type === 'feishu') {
+        fields.push(`
+          <div class="form-item">
+            <label class="form-label">App ID <span class="text-red-400">*</span></label>
+            <input type="text" id="botConfigAppId" class="form-input" placeholder="飞书开放平台App ID" value="${channel.app_id || ''}">
+          </div>
+        `);
+        fields.push(`
+          <div class="form-item">
+            <label class="form-label">App Secret <span class="text-red-400">*</span></label>
+            <input type="password" id="botConfigAppSecret" class="form-input" placeholder="飞书开放平台App Secret" value="${channel.app_secret || ''}">
+          </div>
+        `);
+        fields.push(`
+          <div class="form-item">
+            <label class="form-label">Encrypt Key <span class="text-text-muted text-xs">(可选)</span></label>
+            <input type="password" id="botConfigEncryptKey" class="form-input" placeholder="飞书Encrypt Key" value="${channel.encrypt_key || ''}">
+          </div>
+        `);
+        fields.push(`
+          <div class="form-item">
+            <label class="form-label">Verification Token <span class="text-text-muted text-xs">(可选)</span></label>
+            <input type="password" id="botConfigVerificationToken" class="form-input" placeholder="飞书Verification Token" value="${channel.verification_token || ''}">
+          </div>
+        `);
+        fields.push(`
+          <div class="form-item">
+            <label class="form-label">API URL <span class="text-text-muted text-xs">(可选)</span></label>
+            <input type="text" id="botConfigApiUrl" class="form-input" placeholder="https://open.feishu.cn" value="${channel.api_url || ''}">
+          </div>
+        `);
+      } else {
+        fields.push(`
+          <div class="text-sm text-text-muted text-center py-4">该平台暂无可配置项</div>
+        `);
+      }
+
+      return fields.join('');
+    }
+
+    async function saveBotConfig(channelName) {
+      const channel = allBotChannels.find(c => c.name === channelName);
+      if (!channel) return;
+
+      const config = {};
+      const appIdEl = document.getElementById('botConfigAppId');
+      const appSecretEl = document.getElementById('botConfigAppSecret');
+      const apiUrlEl = document.getElementById('botConfigApiUrl');
+
+      if (appIdEl) config.app_id = appIdEl.value;
+      if (appSecretEl && appSecretEl.value) config.app_secret = appSecretEl.value;
+      if (apiUrlEl) config.api_url = apiUrlEl.value;
+
+      const type = channel.type || channelName;
+      if (type === 'qq') {
+        const allowFromEl = document.getElementById('botConfigAllowFrom');
+        const sandboxEl = document.getElementById('botConfigSandbox');
+        if (allowFromEl) config.allow_from = allowFromEl.value.split(',').map(s => s.trim()).filter(Boolean);
+        if (sandboxEl) config.sandbox = sandboxEl.value === 'true';
+      } else if (type === 'wechat') {
+        const tokenEl = document.getElementById('botConfigToken');
+        const aesKeyEl = document.getElementById('botConfigAesKey');
+        if (tokenEl && tokenEl.value) config.token = tokenEl.value;
+        if (aesKeyEl && aesKeyEl.value) config.aes_key = aesKeyEl.value;
+      } else if (type === 'feishu') {
+        const encryptKeyEl = document.getElementById('botConfigEncryptKey');
+        const verificationTokenEl = document.getElementById('botConfigVerificationToken');
+        if (encryptKeyEl && encryptKeyEl.value) config.encrypt_key = encryptKeyEl.value;
+        if (verificationTokenEl && verificationTokenEl.value) config.verification_token = verificationTokenEl.value;
+      }
+
+      try {
+        const agentSelect = document.getElementById('botConfigAgent');
+        const agentId = agentSelect ? agentSelect.value : null;
+
+        const res = await fetch(`/api/bots/${channelName}/config`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(config)
+        });
+        if (!res.ok) {
+          const err = await res.json();
+          showNotification(`保存失败: ${err.detail || '未知错误'}`, 'error');
+          return;
+        }
+
+        const agentRes = await fetch(`/api/bots/${channelName}/agent`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ agent_id: agentId || null })
+        });
+        if (!agentRes.ok) {
+          const err = await agentRes.json();
+          showNotification(`Agent分配失败: ${err.detail || '未知错误'}`, 'error');
+          return;
+        }
+
+        showNotification('配置已保存', 'success');
+        document.querySelector('.fixed').remove();
+        loadBotChannels();
+      } catch (e) {
+        showNotification(`保存失败: ${e.message}`, 'error');
+      }
     }
 
     // Init

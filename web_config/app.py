@@ -1438,3 +1438,180 @@ async def test_search_api(data: dict):
     except Exception as e:
         logger.error(f"Search test failed: {e}", exc_info=True)
         raise HTTPException(status_code=400, detail=f"Search test failed: {str(e)}")
+
+
+class BotAgentSwitch(BaseModel):
+    agent_id: str | None = None
+
+
+@app.get("/api/bots/channels")
+async def get_bot_channels():
+    """Get all enabled bot channels with their status and sessions."""
+    runtime = getattr(app.state, "channel_runtime", None)
+    if runtime is None or runtime._manager is None:
+        return {"channels": []}
+
+    channel_status = runtime._manager.get_status()
+    settings = _load_settings()
+    channels_config = settings.get("channels", {})
+    bot_agent_assignments = settings.get("bot_agent_assignments", {})
+    channels = []
+
+    for name, status in channel_status.items():
+        channel_cfg = channels_config.get(name, {})
+        if not isinstance(channel_cfg, dict):
+            channel_cfg = {}
+
+        channel_info = {
+            "name": name,
+            "type": name,
+            "running": status.get("running", False),
+            "online": status.get("online"),
+            "last_error": status.get("last_error"),
+            "agent_id": bot_agent_assignments.get(name),
+            "session_count": 0,
+            "sessions": [],
+            **channel_cfg,
+        }
+        for secret_key in (
+            "app_secret",
+            "token",
+            "aes_key",
+            "encrypt_key",
+            "verification_token",
+        ):
+            if channel_info.get(secret_key):
+                channel_info[f"has_{secret_key}"] = True
+                channel_info[secret_key] = ""
+
+        channel_obj = runtime._manager.get_channel(name)
+        if channel_obj is not None:
+            try:
+                sessions = getattr(channel_obj, "sessions", {})
+                if isinstance(sessions, dict):
+                    channel_info["session_count"] = len(sessions)
+                    channel_info["sessions"] = [
+                        {
+                            "sender_id": sid,
+                            "sender_name": sess.get("sender_name", sid),
+                            "last_message": sess.get("last_message", ""),
+                            "message_count": sess.get("message_count", 0),
+                        }
+                        for sid, sess in sessions.items()
+                    ][:10]
+            except Exception:
+                pass
+
+        channels.append(channel_info)
+
+    return {"channels": channels}
+
+
+@app.post("/api/bots/{channel_name}/agent")
+async def switch_bot_agent(channel_name: str, req: BotAgentSwitch):
+    """Switch the agent for a specific bot channel."""
+    agent_id = (req.agent_id or "").strip()
+    payload = _load_agents_payload()
+    agents = payload.get("agents", [])
+    if agent_id and not any(agent.get("id") == agent_id for agent in agents):
+        raise HTTPException(status_code=404, detail=f"Agent not found: {agent_id}")
+
+    data = _load_settings()
+    bot_configs = data.get("bot_agent_assignments", {})
+    if not isinstance(bot_configs, dict):
+        bot_configs = {}
+    if agent_id:
+        bot_configs[channel_name] = agent_id
+    else:
+        bot_configs.pop(channel_name, None)
+    data["bot_agent_assignments"] = bot_configs
+    _save_settings(data)
+
+    runtime = getattr(app.state, "channel_runtime", None)
+    if runtime is not None:
+        runtime.set_bot_agent_assignment(channel_name, agent_id or None)
+
+    return {"status": "ok", "channel": channel_name, "agent_id": agent_id or None}
+
+
+@app.get("/api/bots/{channel_name}/chat/{sender_id}")
+async def get_bot_chat(channel_name: str, sender_id: str):
+    """Get chat messages between a bot channel and a specific user."""
+    runtime = getattr(app.state, "channel_runtime", None)
+    if runtime is None or runtime._manager is None:
+        return {"messages": []}
+
+    channel_obj = runtime._manager.get_channel(channel_name)
+    if channel_obj is None:
+        return {"messages": []}
+
+    try:
+        sessions = getattr(channel_obj, "sessions", {})
+        if isinstance(sessions, dict) and sender_id in sessions:
+            session = sessions[sender_id]
+            messages = session.get("messages", [])
+            return {
+                "messages": [
+                    {
+                        "role": msg.get("role", "user"),
+                        "content": msg.get("content", ""),
+                        "agent_name": msg.get("agent_name"),
+                        "timestamp": msg.get("timestamp"),
+                    }
+                    for msg in messages
+                ]
+            }
+    except Exception:
+        pass
+
+    return {"messages": []}
+
+
+class BotConfigUpdate(BaseModel):
+    app_id: str | None = None
+    app_secret: str | None = None
+    api_url: str | None = None
+    token: str | None = None
+    aes_key: str | None = None
+    allow_from: list[str] | None = None
+    sandbox: bool | None = None
+    encrypt_key: str | None = None
+    verification_token: str | None = None
+
+
+@app.post("/api/bots/{channel_name}/config")
+async def update_bot_config(channel_name: str, req: BotConfigUpdate):
+    """Update configuration for a specific bot channel."""
+    data = _load_settings()
+    channels = data.get("channels", {})
+    if not isinstance(channels, dict):
+        channels = {}
+
+    channel_config = channels.get(channel_name, {})
+    if not isinstance(channel_config, dict):
+        channel_config = {}
+
+    if req.app_id is not None:
+        channel_config["app_id"] = req.app_id
+    if req.app_secret is not None:
+        channel_config["app_secret"] = req.app_secret
+    if req.api_url is not None:
+        channel_config["api_url"] = req.api_url
+    if req.token is not None:
+        channel_config["token"] = req.token
+    if req.aes_key is not None:
+        channel_config["aes_key"] = req.aes_key
+    if req.allow_from is not None:
+        channel_config["allow_from"] = req.allow_from
+    if req.sandbox is not None:
+        channel_config["sandbox"] = req.sandbox
+    if req.encrypt_key is not None:
+        channel_config["encrypt_key"] = req.encrypt_key
+    if req.verification_token is not None:
+        channel_config["verification_token"] = req.verification_token
+
+    channels[channel_name] = channel_config
+    data["channels"] = channels
+    _save_settings(data)
+
+    return {"status": "ok", "channel": channel_name}

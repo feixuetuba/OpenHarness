@@ -48,9 +48,11 @@ def _make_bot_class(channel: "QQChannel") -> "type[botpy.Client]":
             logger.info("QQ bot ready: %s", self.robot.name)
 
         async def on_c2c_message_create(self, message: "C2CMessage"):
+            logger.info("QQ c2c message event received: id=%s", getattr(message, "id", None))
             await channel._on_message(message)
 
         async def on_direct_message_create(self, message):
+            logger.info("QQ direct message event received: id=%s", getattr(message, "id", None))
             await channel._on_message(message)
 
     return _Bot
@@ -138,22 +140,37 @@ class QQChannel(BaseChannel):
     async def _on_message(self, data: "C2CMessage") -> None:
         """Handle incoming message from QQ."""
         try:
+            logger.info("QQChannel._on_message called: id=%s", getattr(data, "id", None))
             # Dedup by message ID
             if data.id in self._processed_ids:
+                logger.info("QQChannel ignored duplicate message: id=%s", data.id)
                 return
             self._processed_ids.append(data.id)
 
             author = data.author
-            user_id = str(getattr(author, 'id', None) or getattr(author, 'user_openid', 'unknown'))
+            user_id = str(getattr(author, "id", None) or getattr(author, "user_openid", "unknown"))
+            user_name = (
+                getattr(author, "username", None)
+                or getattr(author, "nick", None)
+                or f"QQ用户 {user_id[:8]}"
+            )
             content = (data.content or "").strip()
             if not content:
+                logger.info("QQChannel ignored empty message: id=%s sender=%s", data.id, user_id)
                 return
+
+            logger.info(
+                "QQChannel forwarding message: id=%s sender=%s content=%s",
+                data.id,
+                user_id,
+                content[:100],
+            )
 
             await self._handle_message(
                 sender_id=user_id,
                 chat_id=user_id,
                 content=content,
-                metadata={"message_id": data.id},
+                metadata={"message_id": data.id, "sender_name": user_name},
             )
         except Exception:
             logger.exception("Error handling QQ message")

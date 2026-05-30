@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Awaitable, Callable
 
 from openharness.channels.bus.events import InboundMessage, OutboundMessage
 from openharness.channels.bus.queue import MessageBus
@@ -33,11 +33,25 @@ class ChannelBridge:
     loop integration and handles back-pressure through the MessageBus queues.
     """
 
-    def __init__(self, *, engine: "QueryEngine", bus: MessageBus) -> None:
+    def __init__(
+        self,
+        *,
+        engine: "QueryEngine",
+        bus: MessageBus,
+        resolve_agent_id: Callable[[str], str | None] | None = None,
+        create_engine_for_agent: Callable[[str], Awaitable["QueryEngine"]] | None = None,
+        get_channel_sessions: Callable[[str], dict | None] | None = None,
+        resolve_agent_name: Callable[[str], str] | None = None,
+    ) -> None:
         self._engine = engine
         self._bus = bus
         self._running = False
         self._task: asyncio.Task | None = None
+        self._resolve_agent_id = resolve_agent_id
+        self._create_engine_for_agent = create_engine_for_agent
+        self._get_channel_sessions = get_channel_sessions
+        self._resolve_agent_name = resolve_agent_name
+        self._agent_engines: dict[str, "QueryEngine"] = {}
 
     # ------------------------------------------------------------------
     # Public control API
@@ -93,15 +107,36 @@ class ChannelBridge:
 
     async def _handle(self, msg: InboundMessage) -> None:
         """Process one inbound message and publish the reply."""
-        logger.debug("ChannelBridge received from %s/%s", msg.channel, msg.chat_id)
+        logger.info(
+            "ChannelBridge received from %s/%s, content=%s",
+            msg.channel,
+            msg.chat_id,
+            msg.content[:100] if msg.content else "",
+        )
+
+        engine = self._engine
+        agent_id = None
+        if self._resolve_agent_id is not None:
+            agent_id = self._resolve_agent_id(msg.channel)
+            logger.info("ChannelBridge: resolve_agent_id(%s) = %s", msg.channel, agent_id)
+
+        if agent_id and self._create_engine_for_agent is not None:
+            if agent_id not in self._agent_engines:
+                logger.info("Creating QueryEngine for agent %s (channel %s)", agent_id, msg.channel)
+                try:
+                    self._agent_engines[agent_id] = await self._create_engine_for_agent(agent_id)
+                except Exception:
+                    logger.exception("Failed to create engine for agent %s, falling back to default", agent_id)
+                    agent_id = None
+            if agent_id in self._agent_engines:
+                engine = self._agent_engines[agent_id]
 
         reply_parts: list[str] = []
         try:
-            async for event in self._engine.submit_message(msg.content):
+            async for event in engine.submit_message(msg.content):
                 if isinstance(event, AssistantTextDelta):
                     reply_parts.append(event.text)
                 elif isinstance(event, AssistantTurnComplete):
-                    # Turn is done; we'll send the accumulated text below
                     pass
         except Exception:
             logger.exception(
@@ -115,6 +150,22 @@ class ChannelBridge:
         if not reply_text:
             logger.debug("ChannelBridge: empty reply, skipping publish")
             return
+
+        sessions = self._get_channel_sessions(msg.channel) if self._get_channel_sessions else None
+        if sessions is not None:
+            key = msg.session_key_override or msg.sender_id
+            if key in sessions:
+                agent_name = None
+                if agent_id and self._resolve_agent_name:
+                    agent_name = self._resolve_agent_name(agent_id)
+                sessions[key]["messages"].append(
+                    {
+                        "role": "assistant",
+                        "content": reply_text,
+                        "timestamp": __import__("time").time(),
+                        "agent_name": agent_name,
+                    }
+                )
 
         outbound = OutboundMessage(
             channel=msg.channel,
