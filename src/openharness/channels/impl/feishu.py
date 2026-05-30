@@ -1079,12 +1079,14 @@ class FeishuChannel(BaseChannel):
 
             failed_media: list[str] = []
             sent_media: list[str] = []
+            media_modes = msg.metadata.get("_media_modes") if isinstance(msg.metadata, dict) else {}
             for file_path in msg.media:
                 if not os.path.isfile(file_path):
                     logger.warning("Media file not found: %s", file_path)
                     failed_media.append(file_path)
                     continue
                 ext = os.path.splitext(file_path)[1].lower()
+                mode = str(media_modes.get(file_path) or "") if isinstance(media_modes, dict) else ""
                 if ext in self._IMAGE_EXTS:
                     key = await loop.run_in_executor(None, self._upload_image_sync, file_path)
                     if key:
@@ -1104,7 +1106,9 @@ class FeishuChannel(BaseChannel):
                     if key:
                         # Use msg_type "media" for audio/video so users can play inline;
                         # "file" for everything else (documents, archives, etc.)
-                        if ext in self._AUDIO_EXTS or ext in self._VIDEO_EXTS:
+                        if mode == "file":
+                            media_type = "file"
+                        elif ext in self._AUDIO_EXTS or ext in self._VIDEO_EXTS:
                             media_type = "media"
                         else:
                             media_type = "file"

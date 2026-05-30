@@ -6,8 +6,10 @@ including providers, models, authentication, permissions, and more.
 
 from __future__ import annotations
 
+import base64
 import json
 import logging
+import os
 import re
 import shutil
 import sys
@@ -23,7 +25,7 @@ if src_path.exists() and str(src_path) not in sys.path:
     sys.path.insert(0, str(src_path))
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from pydantic import BaseModel
 
 from web_config.channel_runtime import WebConfigChannelRuntime
@@ -159,7 +161,8 @@ def _split_csv_list(value: Any) -> list[str]:
 
 def _sync_social_platforms_to_channels(values: dict[str, Any]) -> None:
     """Keep OpenHarness social settings aligned with runtime channel config."""
-    if "qq_enabled" not in values:
+    social_file_keys = {"social_file_base_url", "social_file_token", "qq_public_file_base_url"}
+    if "qq_enabled" not in values and "wechat_enabled" not in values and not (social_file_keys & set(values)):
         return
 
     data = _load_settings()
@@ -167,25 +170,58 @@ def _sync_social_platforms_to_channels(values: dict[str, Any]) -> None:
     if not isinstance(channels, dict):
         channels = {}
 
-    qq_config = channels.get("qq", {})
-    if not isinstance(qq_config, dict):
-        qq_config = {}
+    if "qq_enabled" in values or social_file_keys & set(values):
+        qq_config = channels.get("qq", {})
+        if not isinstance(qq_config, dict):
+            qq_config = {}
 
-    if values.get("qq_enabled"):
-        qq_config["enabled"] = True
-        qq_config["app_id"] = str(values.get("qq_app_id") or qq_config.get("app_id") or "")
-        qq_config["app_secret"] = str(
-            values.get("qq_app_secret") or qq_config.get("app_secret") or ""
-        )
-        if "qq_allow_from" in values:
-            qq_config["allow_from"] = _split_csv_list(values.get("qq_allow_from"))
-        if "qq_sandbox" in values:
-            qq_config["sandbox"] = bool(values.get("qq_sandbox"))
-        channels["qq"] = qq_config
-    else:
-        if qq_config:
-            qq_config["enabled"] = False
+        qq_enabled = bool(values.get("qq_enabled", qq_config.get("enabled", False)))
+        if qq_enabled:
+            qq_config["enabled"] = True
+            qq_config["app_id"] = str(values.get("qq_app_id") or qq_config.get("app_id") or "")
+            qq_config["app_secret"] = str(
+                values.get("qq_app_secret") or qq_config.get("app_secret") or ""
+            )
+            if "qq_allow_from" in values:
+                qq_config["allow_from"] = _split_csv_list(values.get("qq_allow_from"))
+            if "qq_sandbox" in values:
+                qq_config["sandbox"] = bool(values.get("qq_sandbox"))
+            public_file_base_url = (
+                values.get("qq_public_file_base_url")
+                or values.get("social_file_base_url")
+                or qq_config.get("public_file_base_url")
+                or ""
+            )
+            if public_file_base_url:
+                qq_config["public_file_base_url"] = str(public_file_base_url)
+            public_file_token = values.get("social_file_token") or qq_config.get("public_file_token") or ""
+            if public_file_token:
+                qq_config["public_file_token"] = str(public_file_token)
             channels["qq"] = qq_config
+        else:
+            if qq_config:
+                qq_config["enabled"] = False
+                channels["qq"] = qq_config
+
+    wechat_config = channels.get("wechat", {})
+    if not isinstance(wechat_config, dict):
+        wechat_config = {}
+
+    if values.get("wechat_enabled"):
+        wechat_config["enabled"] = True
+        wechat_config["api_url"] = str(values.get("wechat_api_url") or wechat_config.get("api_url") or "")
+        wechat_config["app_id"] = str(values.get("wechat_app_id") or wechat_config.get("app_id") or "")
+        wechat_config["app_secret"] = str(
+            values.get("wechat_app_secret") or wechat_config.get("app_secret") or ""
+        )
+        wechat_config["token"] = str(values.get("wechat_token") or wechat_config.get("token") or "")
+        wechat_config["aes_key"] = str(values.get("wechat_aes_key") or wechat_config.get("aes_key") or "")
+        wechat_config.setdefault("allow_from", ["*"])
+        channels["wechat"] = wechat_config
+    else:
+        if wechat_config and "wechat_enabled" in values:
+            wechat_config["enabled"] = False
+            channels["wechat"] = wechat_config
 
     data["channels"] = channels
     _save_settings(data)
@@ -823,6 +859,37 @@ async def update_social_platforms(data: dict):
     return {"status": "ok"}
 
 
+@app.get("/api/social/files/{encoded_path:path}")
+async def download_social_file(encoded_path: str, token: str = ""):
+    """Serve generated social files through a constrained, tokenable URL."""
+    expected_token = os.environ.get("OPENHARNESS_SOCIAL_FILE_TOKEN", "").strip()
+    if expected_token and token != expected_token:
+        raise HTTPException(status_code=403, detail="Invalid token")
+
+    try:
+        padding = "=" * (-len(encoded_path) % 4)
+        raw_path = base64.urlsafe_b64decode((encoded_path + padding).encode("ascii")).decode("utf-8")
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid file reference")
+
+    path = Path(raw_path).expanduser().resolve()
+    allowed_roots = [
+        (Path.cwd() / ".openharness" / "social_outputs").resolve(),
+    ]
+    try:
+        from openharness.config.paths import get_data_dir
+
+        allowed_roots.append((get_data_dir() / "media").resolve())
+    except Exception:
+        logger.debug("Unable to include OpenHarness data media root", exc_info=True)
+
+    if not any(path.is_relative_to(root) for root in allowed_roots):
+        raise HTTPException(status_code=403, detail="File is outside social output roots")
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="File not found")
+    return FileResponse(path, filename=path.name)
+
+
 @app.post("/api/social-platforms/{platform_name}/test")
 async def test_social_platform(platform_name: str, data: dict = None):
     """Test connection to a social platform."""
@@ -915,6 +982,45 @@ async def get_channels_status():
         "running_channels": runtime.running_channels,
         "channels": manager.get_status() if manager is not None else {},
     }
+
+
+@app.get("/api/social/wechat/callback")
+async def verify_wechat_callback(request: Request):
+    """Verify WeChat Official Account callback URL."""
+    runtime = getattr(app.state, "channel_runtime", None)
+    manager = getattr(runtime, "_manager", None) if runtime is not None else None
+    channel = manager.get_channel("wechat") if manager is not None else None
+    if channel is None:
+        raise HTTPException(status_code=404, detail="WeChat channel is not enabled")
+
+    params = dict(request.query_params)
+    if not channel.verify_signature(
+        params.get("signature", ""),
+        params.get("timestamp", ""),
+        params.get("nonce", ""),
+    ):
+        raise HTTPException(status_code=403, detail="Invalid WeChat signature")
+    return Response(content=params.get("echostr", ""), media_type="text/plain")
+
+
+@app.post("/api/social/wechat/callback")
+async def receive_wechat_callback(request: Request):
+    """Receive WeChat Official Account message callbacks."""
+    runtime = getattr(app.state, "channel_runtime", None)
+    manager = getattr(runtime, "_manager", None) if runtime is not None else None
+    channel = manager.get_channel("wechat") if manager is not None else None
+    if channel is None:
+        raise HTTPException(status_code=404, detail="WeChat channel is not enabled")
+
+    params = dict(request.query_params)
+    if not channel.verify_signature(
+        params.get("signature", ""),
+        params.get("timestamp", ""),
+        params.get("nonce", ""),
+    ):
+        raise HTTPException(status_code=403, detail="Invalid WeChat signature")
+    result = await channel.handle_callback_xml(await request.body(), params)
+    return Response(content=result, media_type="text/plain")
 
 
 @app.get("/api/skill-management")

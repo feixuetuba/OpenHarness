@@ -209,8 +209,16 @@ class TelegramChannel(BaseChannel):
             self._app = None
 
     @staticmethod
-    def _get_media_type(path: str) -> str:
+    def _get_media_type(path: str, mode: str | None = None) -> str:
         """Guess media type from file extension."""
+        if mode == "file":
+            return "document"
+        if mode == "voice":
+            return "voice"
+        if mode == "audio":
+            return "audio"
+        if mode == "image":
+            return "photo"
         ext = path.rsplit(".", 1)[-1].lower() if "." in path else ""
         if ext in ("jpg", "jpeg", "png", "gif", "webp"):
             return "photo"
@@ -246,9 +254,11 @@ class TelegramChannel(BaseChannel):
                 )
 
         # Send media files
+        media_modes = msg.metadata.get("_media_modes") if isinstance(msg.metadata, dict) else {}
         for media_path in (msg.media or []):
             try:
-                media_type = self._get_media_type(media_path)
+                mode = str(media_modes.get(media_path) or "") if isinstance(media_modes, dict) else ""
+                media_type = self._get_media_type(media_path, mode or None)
                 sender = {
                     "photo": self._app.bot.send_photo,
                     "voice": self._app.bot.send_voice,

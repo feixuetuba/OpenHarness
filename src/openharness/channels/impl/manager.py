@@ -138,6 +138,18 @@ class ChannelManager:
             except ImportError as e:
                 logger.warning("QQ channel not available: %s", e)
 
+        # WeChat channel
+        if self.config.channels.wechat.enabled:
+            try:
+                from openharness.channels.impl.wechat import WeChatChannel
+                self.channels["wechat"] = WeChatChannel(
+                    self.config.channels.wechat,
+                    self.bus,
+                )
+                logger.info("WeChat channel enabled")
+            except ImportError as e:
+                logger.warning("WeChat channel not available: %s", e)
+
         # Matrix channel
         if self.config.channels.matrix.enabled:
             try:

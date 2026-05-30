@@ -559,8 +559,12 @@ class SocialPlatformConfig(BaseModel):
     """Configuration for social platform integrations."""
     
     enabled: bool = False
+    social_file_base_url: str = ""
+    social_file_token: str = ""
     wechat_enabled: bool = False
     wechat_api_url: str = ""
+    wechat_app_id: str = ""
+    wechat_app_secret: str = ""
     wechat_token: str = ""
     wechat_aes_key: str = ""
     
@@ -570,6 +574,7 @@ class SocialPlatformConfig(BaseModel):
     qq_app_secret: str = ""
     qq_allow_from: list[str] = Field(default_factory=list)
     qq_sandbox: bool = False
+    qq_public_file_base_url: str = ""
     
     feishu_enabled: bool = False
     feishu_api_url: str = ""

@@ -83,6 +83,17 @@ class QQConfig(BaseChannelConfig):
     app_id: str = ""
     app_secret: str = ""
     sandbox: bool = False
+    public_file_base_url: str = ""
+    public_file_token: str = ""
+
+
+class WechatConfig(BaseChannelConfig):
+    allow_from: list[str] = Field(default_factory=lambda: ["*"])
+    api_url: str = ""
+    app_id: str = ""
+    app_secret: str = ""
+    token: str = ""
+    aes_key: str = ""
 
 
 class MatrixConfig(BaseChannelConfig):
@@ -112,6 +123,7 @@ class ChannelConfigs(_CompatModel):
     dingtalk: DingTalkConfig = Field(default_factory=DingTalkConfig)
     email: EmailConfig = Field(default_factory=EmailConfig)
     qq: QQConfig = Field(default_factory=QQConfig)
+    wechat: WechatConfig = Field(default_factory=WechatConfig)
     matrix: MatrixConfig = Field(default_factory=MatrixConfig)
     whatsapp: WhatsAppConfig = Field(default_factory=WhatsAppConfig)
     mochat: MochatConfig = Field(default_factory=MochatConfig)
@@ -151,7 +163,28 @@ class Config(_CompatModel):
                 qq_config["allow_from"] = social.get("qq_allow_from") or []
             if "qq_sandbox" in social and "sandbox" not in qq_config:
                 qq_config["sandbox"] = bool(social.get("qq_sandbox"))
+            if "public_file_base_url" not in qq_config:
+                public_file_base_url = social.get("qq_public_file_base_url") or social.get("social_file_base_url")
+                if public_file_base_url:
+                    qq_config["public_file_base_url"] = public_file_base_url
+            if "public_file_token" not in qq_config and social.get("social_file_token"):
+                qq_config["public_file_token"] = social.get("social_file_token")
             channels["qq"] = qq_config
+
+        wechat_enabled = bool(social.get("wechat_enabled"))
+        if wechat_enabled or social.get("wechat_app_id") or social.get("wechat_app_secret"):
+            wechat_config = dict(channels.get("wechat") or {})
+            wechat_config.setdefault("enabled", wechat_enabled)
+            for social_key, channel_key in (
+                ("wechat_api_url", "api_url"),
+                ("wechat_app_id", "app_id"),
+                ("wechat_app_secret", "app_secret"),
+                ("wechat_token", "token"),
+                ("wechat_aes_key", "aes_key"),
+            ):
+                if social.get(social_key):
+                    wechat_config.setdefault(channel_key, social.get(social_key))
+            channels["wechat"] = wechat_config
 
         updated = dict(value)
         updated["channels"] = channels
