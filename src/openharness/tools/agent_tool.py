@@ -43,6 +43,16 @@ class AgentTool(BaseTool):
     input_model = AgentToolInput
 
     async def execute(self, arguments: AgentToolInput, context: ToolExecutionContext) -> ToolResult:
+        try:
+            subagent_depth = int(context.metadata.get("subagent_depth") or 0)
+        except (TypeError, ValueError):
+            subagent_depth = 0
+        if subagent_depth >= 1:
+            return ToolResult(
+                output="Nested subagents are disabled for this execution context.",
+                is_error=True,
+                metadata={"nested_subagent_blocked": True},
+            )
         if arguments.mode not in {"local_agent", "remote_agent", "in_process_teammate"}:
             return ToolResult(
                 output="Invalid mode. Use local_agent, remote_agent, or in_process_teammate.",

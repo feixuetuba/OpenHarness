@@ -176,16 +176,15 @@ class QQChannel(BaseChannel):
             self._debug_media_event("file_not_found", media_path=media_path)
             return False, "本地文件不存在"
 
-        url = self._public_media_url(path)
-        if not url:
-            reason = "QQ 文件接口需要公网可访问的下载 URL，请配置 OPENHARNESS_SOCIAL_FILE_BASE_URL"
-            logger.warning("%s: %s", reason, media_path)
-            self._debug_media_event("missing_public_url", media_path=str(path))
-            return False, reason
+        file_size = path.stat().st_size
+        if file_size == 0:
+            logger.warning("QQ media file is empty: %s", media_path)
+            self._debug_media_event("file_empty", media_path=media_path)
+            return False, "文件内容为空"
 
+        is_group = self._is_group_chat(msg)
         mode = self._media_mode(media_path, msg)
         kind = self._media_kind(media_path, msg)
-        is_group = self._is_group_chat(msg)
         file_type = self._qq_file_type(path, mode, kind)
         
         if is_group and file_type == 4:
@@ -199,6 +198,8 @@ class QQChannel(BaseChannel):
             )
             return False, reason
         
+        use_base64 = not is_group
+        
         try:
             self._debug_media_event(
                 "send_start",
@@ -207,14 +208,29 @@ class QQChannel(BaseChannel):
                 mode=mode,
                 kind=kind,
                 file_type=file_type,
-                url=url,
+                file_name=path.name,
+                file_size=file_size,
+                is_group=is_group,
+                use_base64=use_base64,
             )
-            media = await api.post_c2c_file(
-                openid=openid,
-                file_type=file_type,
-                url=url,
-                srv_send_msg=False,
-            )
+            
+            if use_base64:
+                file_data = base64.b64encode(path.read_bytes()).decode('ascii')
+                media = await self._upload_base64_file(api, openid, file_type, file_data, path.name)
+            else:
+                url = self._public_media_url(path)
+                if not url:
+                    reason = "QQ 群聊文件接口需要公网可访问的下载 URL，请配置 OPENHARNESS_SOCIAL_FILE_BASE_URL"
+                    logger.warning("%s: %s", reason, media_path)
+                    self._debug_media_event("missing_public_url", media_path=str(path))
+                    return False, reason
+                media = await api.post_c2c_file(
+                    openid=openid,
+                    file_type=file_type,
+                    url=url,
+                    srv_send_msg=False,
+                )
+            
             self._debug_media_event("upload_done", media=self._jsonable(media))
             self._msg_seq += 1
             await api.post_c2c_message(
@@ -229,7 +245,7 @@ class QQChannel(BaseChannel):
         except Exception as exc:
             detail = str(exc) or exc.__class__.__name__
             if file_type == 4:
-                detail = f"{detail}；QQ C2C 普通文件(file_type=4)接口可能未开放，可尝试下载链接：{url}"
+                detail = f"{detail}；QQ C2C 普通文件(file_type=4)接口可能未开放"
             logger.warning("QQ media send failed: %s", detail)
             self._debug_media_event(
                 "send_failed",
@@ -237,10 +253,36 @@ class QQChannel(BaseChannel):
                 mode=mode,
                 kind=kind,
                 file_type=file_type,
-                url=url,
+                file_name=path.name,
+                file_size=file_size,
+                is_group=is_group,
+                use_base64=use_base64,
                 error=detail,
             )
             return False, detail
+
+    async def _upload_base64_file(self, api, openid: str, file_type: int, file_data: str, file_name: str) -> dict:
+        http_client = getattr(api, "_http", None)
+        if not http_client:
+            raise RuntimeError("BotAPI HTTP client not available")
+        
+        payload = {
+            "file_type": file_type,
+            "file_data": file_data,
+            "file_name": file_name,
+            "srv_send_msg": False,
+        }
+        
+        from botpy.http import Route
+        route = Route("POST", "/v2/users/{openid}/files", openid=openid)
+        
+        logger.info(
+            "Uploading file via base64: file_type=%s file_name=%s data_size=%d",
+            file_type,
+            file_name,
+            len(file_data),
+        )
+        return await http_client.request(route, json=payload)
 
     async def _on_message(self, data: "C2CMessage") -> None:
         """Handle incoming message from QQ."""
@@ -431,14 +473,26 @@ class QQChannel(BaseChannel):
 
     @staticmethod
     def _qq_file_type(path: Path, mode: str, kind: str = None) -> int:
-        """根据 kind 或 mode/扩展名决定 file_type。
+        """根据发送意图优先决定 file_type，再按媒体类型兜底。
         
+        mode=file/document → file_type=4 (普通文件)
+        mode=voice/audio → file_type=3 (语音)
+        mode=video → file_type=2 (视频)
+        mode=image → file_type=1 (图片)
         kind=document → file_type=4 (普通文件)
         kind=audio → file_type=3 (语音)
         kind=video → file_type=2 (视频)
         kind=image → file_type=1 (图片)
-        未指定 kind 时，根据 mode 和扩展名推断
         """
+        if mode in {"file", "document", "attachment"}:
+            return 4
+        if mode in {"voice", "audio"}:
+            return 3
+        if mode == "video":
+            return 2
+        if mode == "image":
+            return 1
+
         if kind == "document":
             return 4
         if kind == "audio":
@@ -449,11 +503,11 @@ class QQChannel(BaseChannel):
             return 1
         
         suffix = path.suffix.lower()
-        if mode == "image" or suffix in {".jpg", ".jpeg", ".png"}:
+        if suffix in {".jpg", ".jpeg", ".png"}:
             return 1
-        if mode == "video" or suffix == ".mp4":
+        if suffix == ".mp4":
             return 2
-        if mode in {"voice", "audio"} or suffix in {".silk", ".slk", ".mp3", ".ogg", ".wav", ".amr", ".flac", ".aac", ".m4a", ".opus"}:
+        if suffix in {".silk", ".slk", ".mp3", ".ogg", ".wav", ".amr", ".flac", ".aac", ".m4a", ".opus"}:
             return 3
         return 4
 

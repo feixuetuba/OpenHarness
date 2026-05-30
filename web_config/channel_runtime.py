@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import re
 import time
 from pathlib import Path
@@ -20,6 +21,8 @@ from openharness.engine.stream_events import (
     ToolExecutionCompleted,
     ToolExecutionStarted,
 )
+from openharness.engine.query_engine import QueryEngine
+from openharness.tools.base import ToolRegistry
 from openharness.ui.runtime import RuntimeBundle, build_runtime, close_runtime, start_runtime
 
 logger = logging.getLogger(__name__)
@@ -32,6 +35,8 @@ OUTBOUND_MEDIA_RE = re.compile(
     re.IGNORECASE,
 )
 PENDING_MEDIA_NOTICE_SECONDS = 30.0
+SOCIAL_ENGINE_EVENT_TIMEOUT_SECONDS = 180.0
+SOCIAL_DIAGNOSTIC_AGENT_TIMEOUT_SECONDS = 120.0
 MEDIA_WORDS = (
     "文件", "附件", "图片", "照片", "图像", "视频", "音频", "压缩包", "文档", "表格",
     "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "zip", "rar", "7z",
@@ -48,7 +53,8 @@ SOCIAL_OUTPUT_INSTRUCTIONS = (
     "如果需要把本地文件发送给用户，请在回复中单独写一行 [attachment: /absolute/path/to/file]，必须优先使用绝对路径。\n"
     "如果音频要作为语音消息发送，请写 [voice: /absolute/path/to/audio]；"
     "如果音频要作为普通文件发送，请写 [audio-file: /absolute/path/to/audio]。\n"
-    "输出这些标记前，必须确认文件已经真实存在；不要编造 /tmp 路径，也不要只把文件路径作为普通文本返回。"
+    "输出这些标记前，必须确认文件已经真实存在；不要编造 /tmp 路径，也不要只把文件路径作为普通文本返回。\n"
+    "如果使用 ffmpeg，输出文件路径应作为命令最后一个参数；不要使用不存在的 -output 参数。"
 )
 
 
@@ -204,6 +210,7 @@ class WebConfigSmartChannelBridge:
         output_dir = self._ensure_social_output_dir(msg)
         tool_call_count = 0
         tool_names: list[str] = []
+        tool_errors: list[dict[str, Any]] = []
         full_prompt = self._with_social_output_instructions(content, output_dir)
         logger.info(
             "Social model prompt channel=%s chat_id=%s sender=%s output_dir=%s prompt=%s",
@@ -220,7 +227,65 @@ class WebConfigSmartChannelBridge:
             prompt=self._truncate_log_text(full_prompt, limit=4000),
         )
         try:
-            async for event in engine.submit_message(full_prompt):
+            stream = engine.submit_message(full_prompt).__aiter__()
+            while True:
+                try:
+                    event = await asyncio.wait_for(
+                        stream.__anext__(),
+                        timeout=self._engine_event_timeout_seconds(),
+                    )
+                except StopAsyncIteration:
+                    break
+                except asyncio.TimeoutError:
+                    timeout_text = self._diagnose_stalled_turn(msg, tool_names, tool_errors)
+                    logger.warning(
+                        "Social engine event timeout channel=%s chat_id=%s sender=%s tools=%s",
+                        msg.channel,
+                        msg.chat_id,
+                        msg.sender_id,
+                        ",".join(tool_names) if tool_names else "(none)",
+                    )
+                    self._social_debug(
+                        "engine_event_timeout",
+                        msg,
+                        timeout_seconds=self._engine_event_timeout_seconds(),
+                        tool_names=tool_names,
+                        tool_errors=tool_errors[-5:],
+                        diagnosis=timeout_text,
+                    )
+                    aclose = getattr(stream, "aclose", None)
+                    if aclose is not None:
+                        try:
+                            await aclose()
+                        except Exception:
+                            logger.debug("Failed to close timed-out social stream", exc_info=True)
+                    diagnostic_reply = await self._run_diagnostic_subagent(
+                        engine,
+                        msg,
+                        original_prompt=full_prompt,
+                        output_dir=output_dir,
+                        tool_names=tool_names,
+                        tool_errors=tool_errors,
+                        reason="主 agent 长时间没有产生新的模型/工具事件。",
+                    )
+                    if diagnostic_reply:
+                        outbound_text, outbound_media, media_modes = self._extract_outbound_media(
+                            diagnostic_reply,
+                            base_dir=Path(self._cwd),
+                        )
+                        outbound_media, media_modes, missing_media = self._filter_existing_outbound_media(
+                            outbound_media,
+                            media_modes,
+                        )
+                        if missing_media:
+                            missing_text = "无法发送以下文件，因为路径不存在：\n" + "\n".join(f"- {path}" for path in missing_media)
+                            outbound_text = f"{outbound_text}\n\n{missing_text}".strip() if outbound_text else missing_text
+                        if outbound_text or outbound_media:
+                            self._append_assistant_session_message(msg, diagnostic_reply, agent_id)
+                            await self._publish_reply(msg, outbound_text, media=outbound_media, media_modes=media_modes)
+                            return
+                    await self._publish_reply(msg, timeout_text)
+                    return
                 if isinstance(event, AssistantTextDelta):
                     reply_parts.append(event.text)
                 elif isinstance(event, AssistantTurnComplete):
@@ -245,6 +310,12 @@ class WebConfigSmartChannelBridge:
                     self._log_tool_started(msg, event, output_dir)
                 elif isinstance(event, ToolExecutionCompleted):
                     self._log_tool_completed(msg, event)
+                    if event.is_error:
+                        tool_errors.append({
+                            "tool": event.tool_name,
+                            "output": self._truncate_log_text(event.output, limit=1200),
+                            "metadata": event.metadata or {},
+                        })
         except Exception:
             logger.exception("Channel engine error for %s/%s", msg.channel, msg.chat_id)
             reply_parts = ["[Error: failed to process your message]"]
@@ -288,9 +359,43 @@ class WebConfigSmartChannelBridge:
             missing_text = "无法发送以下文件，因为路径不存在：\n" + "\n".join(f"- {path}" for path in missing_media)
             outbound_text = f"{outbound_text}\n\n{missing_text}".strip() if outbound_text else missing_text
         if not outbound_text and not outbound_media:
-            return
+            if tool_errors:
+                diagnostic_reply = await self._run_diagnostic_subagent(
+                    engine,
+                    msg,
+                    original_prompt=full_prompt,
+                    output_dir=output_dir,
+                    tool_names=tool_names,
+                    tool_errors=tool_errors,
+                    reason="主 agent 工具调用失败后没有返回任何可发送内容。",
+                )
+                if diagnostic_reply:
+                    reply_text = diagnostic_reply
+                    outbound_text, outbound_media, media_modes = self._extract_outbound_media(
+                        reply_text,
+                        base_dir=Path(self._cwd),
+                    )
+                    outbound_media, media_modes, missing_media = self._filter_existing_outbound_media(
+                        outbound_media,
+                        media_modes,
+                    )
+                    if missing_media:
+                        missing_text = "无法发送以下文件，因为路径不存在：\n" + "\n".join(f"- {path}" for path in missing_media)
+                        outbound_text = f"{outbound_text}\n\n{missing_text}".strip() if outbound_text else missing_text
+                if not outbound_text and not outbound_media:
+                    outbound_text = self._diagnose_failed_tools(tool_errors)
+                self._social_debug(
+                    "empty_reply_after_tool_errors",
+                    msg,
+                    tool_names=tool_names,
+                    tool_errors=tool_errors[-5:],
+                    fallback_reply=outbound_text,
+                )
+            else:
+                self._social_debug("empty_reply", msg, tool_names=tool_names)
+                outbound_text = "任务没有返回可发送的内容。请稍后重试，或补充更明确的处理要求。"
 
-        self._append_assistant_session_message(msg, reply_text, agent_id)
+        self._append_assistant_session_message(msg, reply_text or outbound_text, agent_id)
         await self._publish_reply(msg, outbound_text, media=outbound_media, media_modes=media_modes)
 
     async def _publish_reply(
@@ -318,6 +423,229 @@ class WebConfigSmartChannelBridge:
     async def _publish_notice(self, msg: InboundMessage, text: str) -> None:
         self._append_assistant_session_message(msg, text, None)
         await self._publish_reply(msg, text)
+
+    async def _run_diagnostic_subagent(
+        self,
+        engine: QueryEngine,
+        msg: InboundMessage,
+        *,
+        original_prompt: str,
+        output_dir: Path,
+        tool_names: list[str],
+        tool_errors: list[dict[str, Any]],
+        reason: str,
+    ) -> str:
+        if self._diagnostic_agent_timeout_seconds() <= 0:
+            return ""
+        try:
+            diagnostic_engine = self._make_diagnostic_engine(engine, msg)
+        except Exception:
+            logger.exception("Failed to create social diagnostic subagent")
+            return ""
+
+        diagnostic_prompt = self._build_diagnostic_prompt(
+            msg,
+            original_prompt=original_prompt,
+            output_dir=output_dir,
+            tool_names=tool_names,
+            tool_errors=tool_errors,
+            reason=reason,
+        )
+        self._social_debug(
+            "diagnostic_subagent_start",
+            msg,
+            timeout_seconds=self._diagnostic_agent_timeout_seconds(),
+            reason=reason,
+            tool_names=tool_names,
+            tool_errors=tool_errors[-5:],
+        )
+        reply_parts: list[str] = []
+        diagnostic_tool_errors: list[dict[str, Any]] = []
+        try:
+            stream = diagnostic_engine.submit_message(diagnostic_prompt).__aiter__()
+            deadline = time.monotonic() + self._diagnostic_agent_timeout_seconds()
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise asyncio.TimeoutError
+                try:
+                    event = await asyncio.wait_for(stream.__anext__(), timeout=max(1.0, remaining))
+                except StopAsyncIteration:
+                    break
+                if isinstance(event, AssistantTextDelta):
+                    reply_parts.append(event.text)
+                elif isinstance(event, AssistantTurnComplete):
+                    self._social_debug(
+                        "diagnostic_assistant_turn_complete",
+                        msg,
+                        message=self._truncate_log_text(getattr(event.message, "text", "") or str(event.message), limit=3000),
+                        tool_use_count=len(getattr(event.message, "tool_uses", None) or []),
+                    )
+                elif isinstance(event, ToolExecutionStarted):
+                    self._social_debug(
+                        "diagnostic_tool_call_start",
+                        msg,
+                        tool=event.tool_name,
+                        input=event.tool_input,
+                    )
+                elif isinstance(event, ToolExecutionCompleted):
+                    self._social_debug(
+                        "diagnostic_tool_call_done",
+                        msg,
+                        tool=event.tool_name,
+                        is_error=event.is_error,
+                        output=self._truncate_log_text(event.output, limit=5000),
+                        metadata=event.metadata or {},
+                    )
+                    if event.is_error:
+                        diagnostic_tool_errors.append({
+                            "tool": event.tool_name,
+                            "output": self._truncate_log_text(event.output, limit=1200),
+                            "metadata": event.metadata or {},
+                        })
+        except asyncio.TimeoutError:
+            self._social_debug(
+                "diagnostic_subagent_timeout",
+                msg,
+                timeout_seconds=self._diagnostic_agent_timeout_seconds(),
+                tool_errors=diagnostic_tool_errors[-5:],
+            )
+            return ""
+        except Exception:
+            logger.exception("Social diagnostic subagent failed")
+            self._social_debug(
+                "diagnostic_subagent_error",
+                msg,
+                tool_errors=diagnostic_tool_errors[-5:],
+            )
+            return ""
+
+        reply = "".join(reply_parts).strip()
+        self._social_debug(
+            "diagnostic_subagent_reply",
+            msg,
+            reply=self._truncate_log_text(reply, limit=5000),
+            tool_errors=diagnostic_tool_errors[-5:],
+        )
+        return reply
+
+    def _make_diagnostic_engine(self, engine: QueryEngine, msg: InboundMessage) -> QueryEngine:
+        tool_registry = ToolRegistry()
+        source_registry = getattr(engine, "_tool_registry")
+        for tool in source_registry.list_tools():
+            if tool.name == "agent":
+                continue
+            tool_registry.register(tool)
+        metadata = dict(getattr(engine, "_tool_metadata", {}) or {})
+        metadata["subagent_depth"] = 1
+        metadata["social_diagnostic_subagent"] = True
+        metadata["session_id"] = f"{msg.session_key or msg.sender_id}:diagnostic"
+        system_prompt = (
+            f"{engine.system_prompt}\n\n"
+            "[社交故障诊断子 agent]\n"
+            "你正在诊断主 agent 的失败。你只能作为一层子 agent 工作，禁止调用或请求任何新的子 agent。\n"
+            "你的目标是分析最近的工具/MCP错误；如果可以安全修复，就直接用现有工具修复并返回最终可发送回复。\n"
+            "如果需要发送生成文件，仍然使用 [attachment: /absolute/path] 或 [audio-file: /absolute/path] 标记。\n"
+            "如果无法修复，请用简短中文说明失败原因和下一步建议。"
+        )
+        return QueryEngine(
+            api_client=engine.api_client,
+            tool_registry=tool_registry,
+            permission_checker=getattr(engine, "_permission_checker"),
+            cwd=getattr(engine, "_cwd"),
+            model=engine.model,
+            system_prompt=system_prompt,
+            max_tokens=getattr(engine, "_max_tokens"),
+            context_window_tokens=getattr(engine, "_context_window_tokens"),
+            auto_compact_threshold_tokens=getattr(engine, "_auto_compact_threshold_tokens"),
+            max_turns=3,
+            permission_prompt=None,
+            ask_user_prompt=None,
+            hook_executor=getattr(engine, "_hook_executor"),
+            tool_metadata=metadata,
+            settings=getattr(engine, "_settings"),
+        )
+
+    def _build_diagnostic_prompt(
+        self,
+        msg: InboundMessage,
+        *,
+        original_prompt: str,
+        output_dir: Path,
+        tool_names: list[str],
+        tool_errors: list[dict[str, Any]],
+        reason: str,
+    ) -> str:
+        debug_log = Path(self._cwd) / ".openharness" / "social_debug.log"
+        return (
+            "主 agent 处理社交消息失败，需要你作为唯一一层诊断子 agent 进行分析和有限修复。\n"
+            f"失败原因触发条件：{reason}\n"
+            f"社交通道：{msg.channel}\n"
+            f"会话：{msg.chat_id}\n"
+            f"输出目录：{output_dir}\n"
+            f"社交调试日志：{debug_log}\n"
+            f"主 agent 已调用工具：{json.dumps(tool_names, ensure_ascii=False)}\n"
+            f"最近工具错误：{json.dumps(tool_errors[-5:], ensure_ascii=False, default=str)}\n\n"
+            "原始用户需求和社交输出约定如下：\n"
+            f"{original_prompt}\n\n"
+            "要求：\n"
+            "1. 不要调用 agent，也不要生成新的子 agent。\n"
+            "2. 如果错误很明显且可修复，可以尝试最多两次修复动作，例如改正命令参数后重新生成文件。\n"
+            "3. 如果修复成功，直接返回给用户的最终文本/文件标记。\n"
+            "4. 如果无法修复、风险较高或仍失败，返回简短失败原因，不要沉默。"
+        )
+
+    @staticmethod
+    def _engine_event_timeout_seconds() -> float:
+        raw = os.environ.get("OPENHARNESS_SOCIAL_ENGINE_EVENT_TIMEOUT_SECONDS", "").strip()
+        if not raw:
+            return SOCIAL_ENGINE_EVENT_TIMEOUT_SECONDS
+        try:
+            return max(10.0, float(raw))
+        except ValueError:
+            logger.warning("Invalid OPENHARNESS_SOCIAL_ENGINE_EVENT_TIMEOUT_SECONDS=%r", raw)
+            return SOCIAL_ENGINE_EVENT_TIMEOUT_SECONDS
+
+    @staticmethod
+    def _diagnostic_agent_timeout_seconds() -> float:
+        raw = os.environ.get("OPENHARNESS_SOCIAL_DIAGNOSTIC_AGENT_TIMEOUT_SECONDS", "").strip()
+        if not raw:
+            return SOCIAL_DIAGNOSTIC_AGENT_TIMEOUT_SECONDS
+        try:
+            return max(0.0, float(raw))
+        except ValueError:
+            logger.warning("Invalid OPENHARNESS_SOCIAL_DIAGNOSTIC_AGENT_TIMEOUT_SECONDS=%r", raw)
+            return SOCIAL_DIAGNOSTIC_AGENT_TIMEOUT_SECONDS
+
+    def _diagnose_failed_tools(self, tool_errors: list[dict[str, Any]]) -> str:
+        last = tool_errors[-1] if tool_errors else {}
+        tool = str(last.get("tool") or "tool")
+        output = self._truncate_log_text(str(last.get("output") or ""), limit=900)
+        if "Unrecognized option 'output'" in output:
+            return (
+                "处理没有完成：工具命令失败了。最近一次错误来自 "
+                f"`{tool}`，ffmpeg 不支持 `-output` 参数，输出文件应直接放在命令末尾。"
+            )
+        if "timed out" in output.lower() or "timeout" in output.lower():
+            return f"处理超时：`{tool}` 长时间没有完成。可以缩小任务范围后重试，或稍后让我继续检查。"
+        if output:
+            return f"处理没有完成：`{tool}` 执行失败。\n\n最近错误：{output}"
+        return f"处理没有完成：`{tool}` 执行失败，但没有返回可用错误信息。"
+
+    def _diagnose_stalled_turn(
+        self,
+        msg: InboundMessage,
+        tool_names: list[str],
+        tool_errors: list[dict[str, Any]],
+    ) -> str:
+        if tool_errors:
+            return self._diagnose_failed_tools(tool_errors)
+        active = tool_names[-1] if tool_names else "模型响应"
+        debug_path = Path(self._cwd) / ".openharness" / "social_debug.log"
+        return (
+            f"任务执行时间过长，当前停在 `{active}` 附近。"
+            f"我已经停止等待本轮执行，详细记录可查看：{debug_path}"
+        )
 
     def _schedule_notice(self, state: dict[str, Any], msg: InboundMessage, text: str) -> None:
         self._cancel_notice(state)

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import re
 import time
 from dataclasses import dataclass
@@ -48,6 +49,7 @@ REACTIVE_COMPACT_STATUS_MESSAGE = "Prompt too long; compacting conversation memo
 MAX_SAFE_COMPLETION_TOKENS = 128_000
 
 log = logging.getLogger(__name__)
+DEFAULT_TOOL_TIMEOUT_SECONDS = 600.0
 
 
 PermissionPrompt = Callable[[str, str], Awaitable[bool]]
@@ -967,18 +969,46 @@ async def _execute_tool_call(
 
     log.debug("executing %s ...", tool_name)
     t0 = time.monotonic()
-    result = await tool.execute(
-        parsed_input,
-        ToolExecutionContext(
-            cwd=context.cwd,
-            metadata={
-                "tool_registry": context.tool_registry,
-                "ask_user_prompt": context.ask_user_prompt,
-                **(context.tool_metadata or {}),
-            },
-            hook_executor=context.hook_executor,
-        ),
-    )
+    timeout_seconds = _tool_timeout_seconds(tool_name)
+    try:
+        result = await asyncio.wait_for(
+            tool.execute(
+                parsed_input,
+                ToolExecutionContext(
+                    cwd=context.cwd,
+                    metadata={
+                        "tool_registry": context.tool_registry,
+                        "ask_user_prompt": context.ask_user_prompt,
+                        **(context.tool_metadata or {}),
+                    },
+                    hook_executor=context.hook_executor,
+                ),
+            ),
+            timeout=timeout_seconds,
+        )
+    except asyncio.TimeoutError:
+        elapsed = time.monotonic() - t0
+        log.warning("tool execution timed out: name=%s id=%s timeout=%.1fs", tool_name, tool_use_id, timeout_seconds)
+        return ToolResultBlock(
+            tool_use_id=tool_use_id,
+            content=(
+                f"Tool {tool_name} timed out after {timeout_seconds:.0f} seconds. "
+                "The running operation was cancelled; inspect tool logs or retry with a smaller task."
+            ),
+            is_error=True,
+            result_metadata={"timed_out": True, "timeout_seconds": timeout_seconds, "elapsed_seconds": elapsed},
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        elapsed = time.monotonic() - t0
+        log.exception("tool execution raised: name=%s id=%s", tool_name, tool_use_id)
+        return ToolResultBlock(
+            tool_use_id=tool_use_id,
+            content=f"Tool {tool_name} failed: {type(exc).__name__}: {exc}",
+            is_error=True,
+            result_metadata={"elapsed_seconds": elapsed},
+        )
     elapsed = time.monotonic() - t0
     log.debug("executed %s in %.2fs err=%s output_len=%d",
               tool_name, elapsed, result.is_error, len(result.output or ""))
@@ -1040,6 +1070,20 @@ def _resolve_permission_file_path(
             return str(path.resolve())
 
     return None
+
+
+def _tool_timeout_seconds(tool_name: str) -> float:
+    raw = os.environ.get("OPENHARNESS_TOOL_TIMEOUT_SECONDS", "").strip()
+    if tool_name.startswith("mcp__"):
+        raw = os.environ.get("OPENHARNESS_MCP_TOOL_TIMEOUT_SECONDS", "").strip() or raw
+    if not raw:
+        return DEFAULT_TOOL_TIMEOUT_SECONDS
+    try:
+        value = float(raw)
+    except ValueError:
+        log.warning("invalid tool timeout value %r; using %.0fs", raw, DEFAULT_TOOL_TIMEOUT_SECONDS)
+        return DEFAULT_TOOL_TIMEOUT_SECONDS
+    return max(1.0, value)
 
 
 def _extract_permission_command(
