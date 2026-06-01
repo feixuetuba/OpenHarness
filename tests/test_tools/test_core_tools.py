@@ -212,6 +212,8 @@ async def test_skill_todo_and_config_tools(tmp_path: Path, monkeypatch):
         ToolExecutionContext(cwd=tmp_path),
     )
     assert "Helpful pytest notes." in skill_result.output
+    assert f"Skill directory: {pytest_dir}" in skill_result.output
+    assert f"cd {pytest_dir} && <command>" in skill_result.output
 
     todo_result = await TodoWriteTool().execute(
         TodoWriteToolInput(item="wire commands"),

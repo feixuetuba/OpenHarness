@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import logging
+import shlex
 from pydantic import BaseModel, Field
 
 from openharness.skills import load_skill_registry
 from openharness.tools.base import BaseTool, ToolExecutionContext, ToolResult
+
+logger = logging.getLogger(__name__)
 
 
 class SkillToolInput(BaseModel):
@@ -26,6 +30,7 @@ class SkillTool(BaseTool):
         return True
 
     async def execute(self, arguments: SkillToolInput, context: ToolExecutionContext) -> ToolResult:
+        logger.info("[SkillTool] Looking up skill: name=%s", arguments.name)
         registry = load_skill_registry(
             context.cwd,
             extra_skill_dirs=context.metadata.get("extra_skill_dirs"),
@@ -33,11 +38,22 @@ class SkillTool(BaseTool):
         )
         skill = registry.get(arguments.name) or registry.get(arguments.name.lower()) or registry.get(arguments.name.title())
         if skill is None:
+            logger.warning("[SkillTool] Skill not found: %s", arguments.name)
             return ToolResult(output=f"Skill not found: {arguments.name}", is_error=True)
         if skill.disable_model_invocation:
             command_name = skill.command_name or skill.name
+            logger.warning("[SkillTool] Skill %s has disable_model_invocation", command_name)
             return ToolResult(
                 output=f"Skill {command_name} can only be invoked by the user as /{command_name}.",
                 is_error=True,
             )
-        return ToolResult(output=skill.content)
+        logger.info("[SkillTool] Found skill: name=%s base_dir=%s path=%s", skill.name, skill.base_dir, skill.path)
+        content = skill.content
+        if skill.base_dir:
+            content = (
+                f"Skill directory: {skill.base_dir}\n"
+                f"Run scripts from this directory, for example: cd {shlex.quote(skill.base_dir)} && <command>\n\n"
+                f"{content}"
+            )
+        logger.info("[SkillTool] Returning skill content (first 500 chars): %s", content[:500])
+        return ToolResult(output=content)

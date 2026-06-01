@@ -892,6 +892,9 @@ async def _execute_tool_call(
     tool_use_id: str,
     tool_input: dict[str, object],
 ) -> ToolResultBlock:
+    import json
+    log.info("[TOOL_CALL] tool=%s id=%s input=%s", tool_name, tool_use_id, json.dumps(tool_input, ensure_ascii=False)[:2000])
+    
     if context.hook_executor is not None:
         pre_hooks = await context.hook_executor.execute(
             HookEvent.PRE_TOOL_USE,
@@ -969,6 +972,7 @@ async def _execute_tool_call(
 
     log.debug("executing %s ...", tool_name)
     t0 = time.monotonic()
+    log.info("[TOOL_EXECUTE] Starting execution of tool: %s", tool_name)
     timeout_seconds = _tool_timeout_seconds(tool_name)
     try:
         result = await asyncio.wait_for(

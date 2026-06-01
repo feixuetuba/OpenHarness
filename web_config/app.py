@@ -13,6 +13,7 @@ import os
 import re
 import shutil
 import sys
+import time
 import zipfile
 from contextlib import asynccontextmanager
 from dataclasses import asdict, is_dataclass
@@ -314,6 +315,7 @@ class AgentChatRequest(BaseModel):
     message: str
     session_id: str | None = None
     agent_id: str | None = None
+    attachments: list[dict[str, Any]] | None = None
 
 
 @app.get("/")
@@ -1276,13 +1278,15 @@ async def test_connection(req: dict):
 async def chat_with_agent(req: AgentChatRequest):
     """Stream a web chat turn through the OpenHarness query engine."""
     message = req.message.strip()
-    if not message:
+    if not message and not req.attachments:
         raise HTTPException(status_code=400, detail="message is required")
 
     async def _event_stream():
         import asyncio
+        import base64
         import time
 
+        from openharness.engine.messages import ConversationMessage, ImageBlock, TextBlock
         from openharness.engine.stream_events import (
             AssistantTextDelta,
             AssistantTurnComplete,
@@ -1313,27 +1317,362 @@ async def chat_with_agent(req: AgentChatRequest):
             restore_metadata = saved_session.get("tool_metadata") if saved_session else None
 
             yield sse("status", {"message": "Starting agent session..."})
+            
+            debug_log_path = Path.cwd() / ".openharness" / "web_outputs.txt"
+            
+            def debug_log(msg: str) -> None:
+                timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+                log_line = f"[{timestamp}] {msg}\n"
+                try:
+                    with open(debug_log_path, "a", encoding="utf-8") as f:
+                        f.write(log_line)
+                except Exception:
+                    pass
+            
+            debug_log("=" * 80)
+            debug_log("NEW CHAT REQUEST STARTED")
+            debug_log(f"Session ID: {session_id}")
+            debug_log(f"Original message: {message}")
+
+            def use_path_only_images_for_current_provider() -> bool:
+                try:
+                    from urllib.parse import urlsplit
+
+                    settings = _get_settings_obj().materialize_active_profile()
+                    api_format = str(settings.api_format or "").lower()
+                    host = (urlsplit(settings.base_url or "").hostname or "").lower()
+                    return api_format in {"openai", "openai_compat"} and host in {"localhost", "127.0.0.1", "::1"}
+                except Exception as exc:
+                    debug_log(f"Failed to inspect provider for image mode: {exc}")
+                    return False
+
+            path_only_images = use_path_only_images_for_current_provider()
+            debug_log(f"Image context mode: {'path-only' if path_only_images else 'inline-image'}")
+            
+            prompt_message = message
+            continuation_keywords = ("继续", "继续执行", "继续生成", "默认", "按默认", "按照默认", "可以", "开始")
+            web_output_dir = (Path.cwd() / ".openharness" / "media" / "web" / "outputs" / session_id).resolve()
+            web_output_dir.mkdir(parents=True, exist_ok=True)
+            debug_log(f"Web output directory: {web_output_dir}")
+            
+            attachments = req.attachments or []
+            
+            debug_log(f"Attachments received: {len(attachments) if attachments else 0}")
+            if attachments:
+                for i, att in enumerate(attachments):
+                    att_type = att.get("type", "unknown")
+                    att_name = att.get("name", "unnamed")
+                    has_data = "data" in att
+                    data_preview = ""
+                    if has_data:
+                        data = att.get("data", "")
+                        data_preview = f", data_length={len(data)}, starts_with_data_prefix={data[:50] if len(data) > 50 else data}"
+                    debug_log(f"  Attachment {i}: type={att_type}, name={att_name}, has_data={has_data}{data_preview}")
+            
+            image_attachments = [att for att in attachments if att.get("type") == "image"] if attachments else []
+            file_attachments = [att for att in attachments if att.get("type") != "image"] if attachments else []
+            
+            debug_log(f"Image attachments: {len(image_attachments)}, File attachments: {len(file_attachments)}")
+            
+            attachment_notes = []
+            saved_image_paths = []
+            
+            if restore_messages:
+                debug_log(f"Restoring messages from session: {len(restore_messages)} messages")
+                for msg in restore_messages:
+                    if msg.get("role") == "user":
+                        content = msg.get("content", [])
+                        if isinstance(content, list):
+                            debug_log(f"  User message with {len(content)} content blocks")
+                            for block in content:
+                                if isinstance(block, dict) and block.get("type") == "image":
+                                    debug_log(f"  Found image block in session: keys={list(block.keys())}")
+                                    if path_only_images:
+                                        source_path = str(block.get("source_path") or "").strip()
+                                        if source_path and Path(source_path).exists():
+                                            abs_path = str(Path(source_path).expanduser().resolve())
+                                            if abs_path not in saved_image_paths:
+                                                saved_image_paths.append(abs_path)
+                                                attachment_notes.append(f"[image: {abs_path}]")
+                                                debug_log(f"Restored image path from session: {abs_path}")
+                                        continue
+                                    media_type = block.get("media_type", "image/jpeg")
+                                    data = block.get("data", "")
+                                    if not data:
+                                        source = block.get("source", {})
+                                        if isinstance(source, dict):
+                                            media_type = source.get("media_type", media_type)
+                                            data = source.get("data", "")
+                                    
+                                    if data:
+                                        import mimetypes as mimetypes_lib
+                                        media_dir = Path.cwd() / ".openharness" / "media" / "web"
+                                        media_dir.mkdir(parents=True, exist_ok=True)
+                                        
+                                        ext = mimetypes_lib.guess_extension(media_type.split(";")[0].strip()) or ".jpg"
+                                        import hashlib
+                                        data_hash = hashlib.md5(data[:100].encode()).hexdigest()[:8]
+                                        safe_name = f"restored_{data_hash}{ext}"
+                                        
+                                        target_path = media_dir / safe_name
+                                        counter = 1
+                                        while target_path.exists():
+                                            target_path = media_dir / f"restored_{data_hash}_{counter}{ext}"
+                                            counter += 1
+                                        
+                                        try:
+                                            target_path.write_bytes(base64.b64decode(data))
+                                            abs_path = str(target_path.resolve())
+                                            if abs_path not in saved_image_paths:
+                                                saved_image_paths.append(abs_path)
+                                                attachment_notes.append(f"[image: {abs_path}]")
+                                                debug_log(f"Restored image from session: {abs_path}, size={target_path.stat().st_size}")
+                                        except Exception as e:
+                                            debug_log(f"Failed to restore image from session: {e}")
+                                else:
+                                    debug_log(f"  Content block type: {block.get('type', 'unknown')}")
+            
+            if saved_image_paths:
+                debug_log(f"Total restored images: {len(saved_image_paths)}")
+                for p in saved_image_paths:
+                    debug_log(f"  Restored: {p}")
+            
+            if image_attachments:
+                import mimetypes as mimetypes_lib
+                media_dir = Path.cwd() / ".openharness" / "media" / "web"
+                media_dir.mkdir(parents=True, exist_ok=True)
+                debug_log(f"Media directory: {media_dir}")
+                
+                for idx, att in enumerate(image_attachments, start=1):
+                    att_name = att.get("name", f"image-{idx}")
+                    img_data = att.get("data", "")
+                    debug_log(f"Processing image {idx}: name={att_name}, data_length={len(img_data)}, starts_with_data={img_data.startswith('data:')}")
+                    if img_data.startswith("data:"):
+                        header_end = img_data.find(",")
+                        if header_end != -1:
+                            mime_header = img_data[5:header_end]
+                            img_data = img_data[header_end + 1:]
+                            debug_log(f"  MIME header: {mime_header}, data after header length: {len(img_data)}")
+                        else:
+                            mime_header = "image/jpeg"
+                    else:
+                        mime_header = att.get("mimeType", "image/jpeg")
+                        debug_log(f"  No data: prefix, using mimeType: {mime_header}")
+                    
+                    ext = mimetypes_lib.guess_extension(mime_header.split(";")[0].strip()) or ".jpg"
+                    safe_name = re.sub(r'[^\w\-_\.]', '_', att_name)
+                    if not safe_name.endswith(ext):
+                        safe_name = f"{safe_name}{ext}"
+                    
+                    target_path = media_dir / safe_name
+                    counter = 1
+                    while target_path.exists():
+                        stem = target_path.stem
+                        target_path = media_dir / f"{stem}_{counter}{ext}"
+                        counter += 1
+                    
+                    try:
+                        target_path.write_bytes(base64.b64decode(img_data))
+                        abs_path = str(target_path.resolve())
+                        saved_image_paths.append(abs_path)
+                        attachment_notes.append(f"[image: {abs_path}]")
+                        file_size = target_path.stat().st_size
+                        debug_log(f"Image saved: {abs_path}, size={file_size} bytes")
+                    except Exception as e:
+                        attachment_notes.append(f"[image: {att_name} - save failed: {e}]")
+                        debug_log(f"Failed to save image: {e}")
+            
+            if file_attachments:
+                for att in file_attachments:
+                    att_type = att.get("type", "file")
+                    att_name = att.get("name", "unknown")
+                    if att_type == "voice":
+                        attachment_notes.append(f"[voice: {att_name}]")
+                    else:
+                        attachment_notes.append(f"[file: {att_name}]")
+            
+            if attachment_notes:
+                if prompt_message:
+                    prompt_message = prompt_message + "\n\n" + "\n".join(attachment_notes)
+                else:
+                    prompt_message = "\n".join(attachment_notes)
+            
+            if saved_image_paths and any(keyword in message for keyword in continuation_keywords):
+                prompt_message = (
+                    f"{message}\n\n"
+                    "This is a continuation of the previous unfinished file-generation request. "
+                    "Use the restored attachment above as the input and continue the requested task."
+                )
+                prompt_message = prompt_message + "\n\n" + "\n".join(attachment_notes)
+            
+            import os
+            skills_dir = Path(os.path.expanduser("~/.openharness/skills"))
+            if skills_dir.exists():
+                skill_paths = list(skills_dir.glob("*/SKILL.md"))
+                if skill_paths:
+                    skill_info_lines = []
+                    for skill_md in skill_paths:
+                        skill_name = skill_md.parent.name
+                        skill_dir = str(skill_md.parent)
+                        skill_info_lines.append(f"- Skill '{skill_name}' is installed at: {skill_dir}")
+                    if skill_info_lines:
+                        prompt_message = prompt_message + "\n\nAvailable skills:\n" + "\n".join(skill_info_lines)
+            
+            output_instructions = (
+                "\n\nWeb output requirements:\n"
+                f"- If you generate any image, document, audio, archive, or other file, save it under: {web_output_dir}\n"
+                "- To send a generated file to the user, include a standalone marker in the final response, for example:\n"
+                f"  [image: {web_output_dir}/result.jpg]\n"
+                f"  [attachment: {web_output_dir}/result.zip]\n"
+                "- Do not say the task is complete or ask the user to view the result unless the file was actually generated and the final response includes its marker.\n"
+            )
+            prompt_message = prompt_message + output_instructions
+            
+            debug_log(f"Final prompt_message (first 500 chars): {prompt_message[:500]}")
+            
+            from openharness.engine.messages import ConversationMessage, ImageBlock, TextBlock
+            
+            user_content_blocks = []
+            if prompt_message:
+                user_content_blocks.append(TextBlock(text=prompt_message))
+                debug_log(f"Added TextBlock with length: {len(prompt_message)}")
+            
+            for img_path in saved_image_paths:
+                if path_only_images:
+                    debug_log(f"Skipped ImageBlock for local provider; using path only: {img_path}")
+                    continue
+                try:
+                    image_block = ImageBlock.from_path(img_path)
+                    user_content_blocks.append(image_block)
+                    debug_log(f"Added ImageBlock from: {img_path}")
+                except Exception as e:
+                    debug_log(f"Failed to create ImageBlock from {img_path}: {e}")
+                    pass
+            
+            debug_log(f"Total content blocks: {len(user_content_blocks)}")
+            
+            user_message = ConversationMessage.from_user_content(user_content_blocks) if user_content_blocks else ConversationMessage.from_user_text("[Attachment only message]")
+            debug_log(f"User message created with {len(user_message.content)} content blocks")
+            for i, block in enumerate(user_message.content):
+                if isinstance(block, TextBlock):
+                    debug_log(f"  Block {i}: TextBlock, text_length={len(block.text)}")
+                elif isinstance(block, ImageBlock):
+                    source_info = "unknown"
+                    if hasattr(block, 'source'):
+                        source = block.source
+                        source_info = f"type={type(source).__name__}"
+                        if hasattr(source, 'media_type'):
+                            source_info += f", media_type={source.media_type}"
+                        if hasattr(source, 'data'):
+                            source_info += f", data_length={len(source.data) if source.data else 0}"
+                    debug_log(f"  Block {i}: ImageBlock, {source_info}")
+            
+            debug_log(f"Submitting user message to engine...")
+            
             bundle = await build_runtime(
-                prompt=message,
+                prompt="[Session initialized]",
                 cwd=str(Path.cwd()),
                 model=agent.get("model") if agent else None,
                 max_turns=agent.get("max_turns") if agent else None,
                 system_prompt=agent.get("system_prompt") if agent else None,
                 restore_messages=restore_messages,
                 restore_tool_metadata=restore_metadata,
-                permission_prompt=lambda _tool, _reason: asyncio.sleep(0, result=False),
+                permission_prompt=lambda _tool, _reason: asyncio.sleep(0, result=True),
                 ask_user_prompt=lambda _question: asyncio.sleep(0, result=""),
-                edit_approval_prompt=lambda _path, _diff, _added, _removed: asyncio.sleep(0, result="reject"),
+                edit_approval_prompt=lambda _path, _diff, _added, _removed: asyncio.sleep(0, result="accept"),
             )
             bundle.session_id = session_id
             bundle.engine.tool_metadata["session_id"] = session_id
+            
+            logger.info(f"[DEBUG] Submitting user message to engine...")
+            
+            accumulated_text = []
+            response_text_parts = []
+            tool_errors = []
+            tool_names = []
+            sent_file_paths = []
+            expects_generated_media = bool(saved_image_paths or image_attachments) and any(
+                keyword in message for keyword in (
+                    "生成", "证件照", "图片", "照片", "photo", "image", *continuation_keywords
+                )
+            )
 
-            async for event in bundle.engine.submit_message(message):
+            def format_tool_failure(tool_errors: list[dict[str, Any]]) -> str:
+                last = tool_errors[-1] if tool_errors else {}
+                tool = str(last.get("tool") or "tool")
+                output = str(last.get("output") or "").strip()
+                if len(output) > 1200:
+                    output = output[:1200].rstrip() + "..."
+                if "can't open file" in output and "No such file or directory" in output:
+                    return (
+                        f"处理没有完成：`{tool}` 执行脚本时找不到文件。\n\n"
+                        f"最近错误：{output}\n\n"
+                        "请确认命令使用了脚本的绝对路径，或先 `cd` 到对应 skill 目录后再运行。"
+                    )
+                if output:
+                    return f"处理没有完成：`{tool}` 执行失败。\n\n最近错误：{output}"
+                return f"处理没有完成：`{tool}` 执行失败，但没有返回可用错误信息。"
+
+            generated_file_re = re.compile(r"(/[^\s'\"`\]\)]+?\.(?:jpg|jpeg|png|webp|gif|pdf|zip|mp3|wav|m4a|mp4))", re.IGNORECASE)
+
+            def collect_generated_files(text: str) -> list[Path]:
+                paths: list[Path] = []
+                for raw_path in generated_file_re.findall(text or ""):
+                    path = Path(raw_path).expanduser()
+                    try:
+                        resolved = path.resolve()
+                    except Exception:
+                        continue
+                    if not resolved.is_file():
+                        continue
+                    try:
+                        resolved.relative_to(web_output_dir)
+                    except ValueError:
+                        continue
+                    if resolved not in paths:
+                        paths.append(resolved)
+                return paths
+
+            def marker_for_path(path: Path) -> str:
+                if path.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp", ".gif"}:
+                    return "image"
+                if path.suffix.lower() in {".mp3", ".wav", ".m4a"}:
+                    return "audio"
+                if path.suffix.lower() == ".mp4":
+                    return "video"
+                return "file"
+
+            def is_context_too_long(message: str) -> bool:
+                normalized = message.lower()
+                return any(
+                    needle in normalized
+                    for needle in (
+                        "prompt too long",
+                        "context_length_exceeded",
+                        "context length",
+                        "exceeds the available context size",
+                        "exceed_context",
+                        "n_ctx",
+                    )
+                )
+
+            async for event in bundle.engine.submit_message(user_message):
                 if isinstance(event, AssistantTextDelta):
+                    accumulated_text.append(event.text)
+                    response_text_parts.append(event.text)
                     yield sse("text", {"text": event.text})
                 elif isinstance(event, ToolExecutionStarted):
+                    tool_names.append(event.tool_name)
                     yield sse("tool_start", {"tool": event.tool_name, "input": event.tool_input})
                 elif isinstance(event, ToolExecutionCompleted):
+                    debug_log(f"ToolExecutionCompleted: tool={event.tool_name}, is_error={event.is_error}, output_length={len(str(event.output))}")
+                    debug_log(f"  Tool output (first 500 chars): {str(event.output)[:500]}")
+                    if event.is_error:
+                        tool_errors.append({
+                            "tool": event.tool_name,
+                            "output": str(event.output),
+                            "metadata": event.metadata or {},
+                        })
                     yield sse(
                         "tool_complete",
                         {
@@ -1343,6 +1682,23 @@ async def chat_with_agent(req: AgentChatRequest):
                             "metadata": event.metadata or {},
                         },
                     )
+                    if not event.is_error:
+                        for generated_path in collect_generated_files(str(event.output)):
+                            file_path = str(generated_path)
+                            if file_path in sent_file_paths:
+                                continue
+                            file_data = generated_path.read_bytes()
+                            import base64 as b64
+                            encoded_data = b64.b64encode(file_data).decode("ascii")
+                            sent_file_paths.append(file_path)
+                            debug_log(f"Sending generated file from tool output: {file_path}")
+                            yield sse("file", {
+                                "path": file_path,
+                                "name": generated_path.name,
+                                "type": marker_for_path(generated_path),
+                                "data": encoded_data,
+                                "size": len(file_data),
+                            })
                 elif isinstance(event, StatusEvent):
                     yield sse("status", {"message": event.message})
                 elif isinstance(event, CompactProgressEvent):
@@ -1355,9 +1711,119 @@ async def chat_with_agent(req: AgentChatRequest):
                         },
                     )
                 elif isinstance(event, ErrorEvent):
+                    if "empty assistant message" in event.message:
+                        if not "".join(response_text_parts).strip():
+                            fallback_text = format_tool_failure(tool_errors) if tool_errors else (
+                                "本轮模型没有返回可发送的文本。会话已保持可继续状态，请重试一次或补充更具体的要求。"
+                            )
+                            response_text_parts.append(fallback_text)
+                            debug_log(f"Empty assistant message converted to text reply: {fallback_text[:500]}")
+                            yield sse("text", {"text": fallback_text})
+                        else:
+                            debug_log("Ignored empty assistant message after text was already sent")
+                        continue
+                    if sent_file_paths and is_context_too_long(event.message):
+                        note = "\n\n生成文件已发送。本轮后续总结因为上下文过长被跳过，会话仍可继续。"
+                        response_text_parts.append(note)
+                        debug_log(f"Context-too-long after file delivery suppressed: {event.message[:500]}")
+                        yield sse("text", {"text": note})
+                        continue
                     yield sse("error", {"message": event.message, "recoverable": event.recoverable})
                 elif isinstance(event, AssistantTurnComplete):
-                    continue
+                    message_text = event.message.text
+                    if message_text and message_text.strip():
+                        debug_log(f"AssistantTurnComplete message text: {message_text[:500]}")
+                        
+                        outbound_media_re = re.compile(
+                            r"\[(attachment|file|document|image|photo|video|audio|voice|audio-file|media):\s*([^\]\n]+?)\s*\]",
+                            re.IGNORECASE,
+                        )
+                        
+                        files_to_send = []
+                        def extract_and_remove_media(match: re.Match[str]) -> str:
+                            marker = match.group(1).lower()
+                            raw_path = match.group(2).strip()
+                            if " - " in raw_path:
+                                return match.group(0)
+                            
+                            path = Path(raw_path).expanduser()
+                            if path.is_absolute() and path.exists():
+                                files_to_send.append({"path": str(path), "type": marker})
+                                return ""
+                            
+                            return match.group(0)
+                        
+                        cleaned_text = outbound_media_re.sub(extract_and_remove_media, message_text)
+                        cleaned_text = re.sub(r"\n{3,}", "\n\n", cleaned_text).strip()
+                        
+                        already_sent = "".join(accumulated_text)
+                        if cleaned_text and cleaned_text not in already_sent:
+                            response_text_parts.append(cleaned_text)
+                            yield sse("text", {"text": cleaned_text})
+                        
+                        if files_to_send:
+                            for file_info in files_to_send:
+                                file_path = file_info["path"]
+                                file_type = file_info["type"]
+                                if file_path in sent_file_paths:
+                                    continue
+                                debug_log(f"Sending file to user: {file_path}, type={file_type}")
+                                
+                                try:
+                                    path_obj = Path(file_path)
+                                    if path_obj.exists():
+                                        file_data = path_obj.read_bytes()
+                                        import base64 as b64
+                                        encoded_data = b64.b64encode(file_data).decode("ascii")
+                                        yield sse("file", {
+                                            "path": file_path,
+                                            "name": path_obj.name,
+                                            "type": file_type,
+                                            "data": encoded_data,
+                                            "size": len(file_data),
+                                        })
+                                        sent_file_paths.append(file_path)
+                                except Exception as e:
+                                    debug_log(f"Failed to send file {file_path}: {e}")
+                        
+                        accumulated_text = []
+                    else:
+                        debug_log(f"AssistantTurnComplete with empty text, tool_uses: {len(event.message.tool_uses) if hasattr(event.message, 'tool_uses') else 'N/A'}")
+                        accumulated_text = []
+
+            if not "".join(response_text_parts).strip() and tool_errors:
+                fallback_text = format_tool_failure(tool_errors)
+                debug_log(f"Fallback tool error reply: {fallback_text[:500]}")
+                yield sse("text", {"text": fallback_text})
+            elif expects_generated_media and not "".join(response_text_parts).strip() and not sent_file_paths:
+                fallback_text = (
+                    "本轮没有返回可发送的内容，也没有检测到生成图片。"
+                    "请重试，或明确要求 agent 运行 `id-photo-generator` 脚本并返回 `[image: /absolute/path]`。"
+                )
+                response_text_parts.append(fallback_text)
+                debug_log(
+                    "Generated-media turn ended with no text and no file: "
+                    f"tool_names={tool_names}, tool_errors={tool_errors[-3:]}"
+                )
+                yield sse("text", {"text": fallback_text})
+            elif expects_generated_media and not sent_file_paths:
+                final_text = "".join(response_text_parts)
+                completion_claim = any(
+                    phrase in final_text
+                    for phrase in ("任务完成", "生成完成", "请查看生成结果", "请查看结果", "处理完成")
+                )
+                only_loaded_skill = tool_names and set(tool_names).issubset({"skill"})
+                if completion_claim or only_loaded_skill:
+                    debug_log(
+                        "Generated-media completion without file marker: "
+                        f"tool_names={tool_names}, sent_file_paths={sent_file_paths}"
+                    )
+                    warning_text = (
+                        "\n\n未检测到可发送的生成文件。本轮没有收到有效的图片附件标记，"
+                        "也没有确认生成脚本产出了结果文件；请让 agent 继续执行生成命令。"
+                    )
+                    response_text_parts.append(warning_text)
+                    yield sse("text", {"text": warning_text})
 
             settings = bundle.current_settings()
             bundle.session_backend.save_snapshot(

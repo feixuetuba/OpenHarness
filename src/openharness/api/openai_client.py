@@ -10,6 +10,7 @@ import re
 from typing import Any, AsyncIterator
 from urllib.parse import urlsplit, urlunsplit
 
+import httpx
 from openai import AsyncOpenAI
 
 from openharness.api.client import (
@@ -264,7 +265,14 @@ class OpenAICompatibleClient:
     so it can be used as a drop-in replacement in the agent loop.
     """
 
-    def __init__(self, api_key: str, *, base_url: str | None = None, timeout: float | None = None) -> None:
+    def __init__(
+        self,
+        api_key: str,
+        *,
+        base_url: str | None = None,
+        timeout: float | None = None,
+        check_local_server: bool = False,
+    ) -> None:
         if not api_key:
             raise AuthenticationFailure(
                 "API key is required for OpenAI-compatible clients. "
@@ -275,6 +283,8 @@ class OpenAICompatibleClient:
             "default_headers": {"Authorization": f"Bearer {api_key}"},
         }
         normalized_base_url = _normalize_openai_base_url(base_url)
+        self._base_url = normalized_base_url
+        self._check_local_server = check_local_server
         if normalized_base_url:
             kwargs["base_url"] = normalized_base_url
         if timeout is not None:
@@ -287,6 +297,7 @@ class OpenAICompatibleClient:
 
     async def stream_message(self, request: ApiMessageRequest) -> AsyncIterator[ApiStreamEvent]:
         """Yield text deltas and the final message, matching the Anthropic client interface."""
+        await self._ensure_local_server_available()
         last_error: Exception | None = None
 
         for attempt in range(MAX_RETRIES + 1):
@@ -456,6 +467,24 @@ class OpenAICompatibleClient:
         if status == 429:
             return RateLimitFailure(msg)
         return RequestFailure(msg)
+
+    async def _ensure_local_server_available(self) -> None:
+        """Fail fast when a local OpenAI-compatible server has exited."""
+        if not self._check_local_server or not self._base_url:
+            return
+        parts = urlsplit(self._base_url)
+        if parts.hostname not in {"localhost", "127.0.0.1", "::1"}:
+            return
+        models_url = urlunsplit((parts.scheme, parts.netloc, f"{parts.path.rstrip('/')}/models", "", ""))
+        try:
+            async with httpx.AsyncClient(timeout=2.0) as client:
+                response = await client.get(models_url)
+                response.raise_for_status()
+        except Exception as exc:
+            raise RequestFailure(
+                f"本地模型服务不可用：无法连接 {models_url}。"
+                "如果 llama.cpp 因 OOM 退出，请先重启监听该端口的模型服务，再重试。"
+            ) from exc
 
 
 # Matches complete <think>…</think> blocks (DOTALL so newlines are included).

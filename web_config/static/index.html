@@ -1128,7 +1128,23 @@
               </div>
             </div>
             <div class="p-4 border-t border-dark-border bg-dark-card/60 backdrop-blur-sm">
+              <div id="attachmentPreview" class="hidden mb-3 p-3 bg-dark-bg-secondary border border-dark-border rounded-xl">
+                <div id="attachmentPreviewContent" class="flex flex-wrap gap-2"></div>
+              </div>
               <div class="flex gap-3">
+                <div class="flex items-center gap-2">
+                  <button onclick="document.getElementById('fileInput').click()" class="p-3 bg-dark-bg-secondary border border-dark-border rounded-xl text-text-muted hover:text-accent-green hover:border-accent-green/50 transition-all duration-200" title="发送文件">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13"/></svg>
+                  </button>
+                  <input type="file" id="fileInput" class="hidden" multiple onchange="handleFileSelect(event)">
+                  <button onclick="document.getElementById('imageInput').click()" class="p-3 bg-dark-bg-secondary border border-dark-border rounded-xl text-text-muted hover:text-accent-blue hover:border-accent-blue/50 transition-all duration-200" title="发送图片">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+                  </button>
+                  <input type="file" id="imageInput" class="hidden" accept="image/*" multiple onchange="handleImageSelect(event)">
+                  <button id="voiceRecordBtn" onclick="toggleVoiceRecording()" class="p-3 bg-dark-bg-secondary border border-dark-border rounded-xl text-text-muted hover:text-accent-purple hover:border-accent-purple/50 transition-all duration-200" title="录制语音">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"/></svg>
+                  </button>
+                </div>
                 <input type="text" id="chatInput" placeholder="输入消息..." class="flex-1 px-4 py-3 bg-dark-bg-secondary border border-dark-border rounded-xl text-text-primary text-sm focus:outline-none focus:border-accent-green focus:ring-2 focus:ring-accent-green/20 transition-all duration-200 placeholder:text-text-muted" onkeypress="if(event.key==='Enter')sendMessage()">
                 <button onclick="sendMessage()" class="px-6 py-3 bg-gradient-to-r from-accent-green to-accent-green-dark text-white text-sm font-medium rounded-xl hover:shadow-glow hover:scale-[1.02] active:scale-[0.98] transition-all duration-200">
                   <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"/></svg>
@@ -3011,6 +3027,10 @@
     let chatSessionId = 'session_' + Date.now();
     let isChatStreaming = false;
     let chatHistorySessions = [];
+    let pendingAttachments = [];
+    let isRecordingVoice = false;
+    let mediaRecorder = null;
+    let voiceRecordChunks = [];
 
     async function loadChatHistory() {
       try {
@@ -3143,6 +3163,10 @@
           alert('删除失败: ' + (err.detail || `HTTP ${res.status}`));
           return;
         }
+        if (chatSessionId === id) {
+          chatSessionId = null;
+          document.getElementById('chatMessages').innerHTML = '<div class="flex items-center justify-center h-full"><div class="text-center"><div class="text-6xl mb-4 opacity-30">💬</div><div class="text-text-muted text-sm">会话已删除</div></div></div>';
+        }
         await loadChatHistory();
       } catch (e) {
         alert('删除失败: ' + e.message);
@@ -3189,24 +3213,57 @@
     async function sendMessage() {
       const input = document.getElementById('chatInput');
       const msg = input.value.trim();
-      if (!msg || isChatStreaming) return;
+      if ((!msg && pendingAttachments.length === 0) || isChatStreaming) return;
 
       const container = document.getElementById('chatMessages');
       if (container.querySelector('.text-center')) {
         container.innerHTML = '';
       }
 
-      // Show user message
-      // Show user message
+      const attachmentsToSend = [...pendingAttachments];
+      pendingAttachments = [];
+      renderAttachmentPreview();
+
+      let userMessageHtml = '';
+      if (msg) {
+        userMessageHtml += `<div class="mb-2">${escapeHtml(msg)}</div>`;
+      }
+      
+      attachmentsToSend.forEach(att => {
+        if (att.type === 'image') {
+          userMessageHtml += `<img src="${att.data}" class="max-w-xs rounded-lg mb-2" alt="${escapeHtml(att.name)}">`;
+        } else if (att.type === 'voice') {
+          userMessageHtml += `
+            <div class="flex items-center gap-2 mb-2">
+              <audio controls class="max-w-xs">
+                <source src="${att.data}" type="audio/webm">
+                您的浏览器不支持语音播放
+              </audio>
+            </div>
+          `;
+        } else {
+          userMessageHtml += `
+            <div class="flex items-center gap-2 p-2 bg-white/10 rounded-lg mb-2">
+              <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+              <div class="flex-1 min-w-0">
+                <div class="text-xs truncate">${escapeHtml(att.name)}</div>
+                <div class="text-xs opacity-75">${formatFileSize(att.size)}</div>
+              </div>
+              <a href="${att.data}" download="${escapeHtml(att.name)}" class="text-xs underline">下载</a>
+            </div>
+          `;
+        }
+      });
+
       container.innerHTML += `
         <div class="flex justify-end animate-fade-in">
-          <div class="chat-message-user">${escapeHtml(msg)}</div>
+          <div class="chat-message-user">${userMessageHtml}</div>
         </div>
       `;
       input.value = '';
       container.scrollTop = container.scrollHeight;
 
-      addTraceLog(`[USER] ${msg}`);
+      addTraceLog(`[USER] ${msg}${attachmentsToSend.length > 0 ? ` (+${attachmentsToSend.length}个附件)` : ''}`);
 
       const assistantId = 'assistant-' + Date.now();
       container.innerHTML += `
@@ -3225,10 +3282,26 @@
       try {
         addTraceLog(`[DEBUG] 发送请求到 /api/chat/agent`);
         addTraceLog(`[DEBUG] 使用 Agent: ${activeAgentId || 'default'}`);
+        
+        const requestBody = {
+          message: msg,
+          session_id: chatSessionId,
+          agent_id: activeAgentId
+        };
+        
+        if (attachmentsToSend.length > 0) {
+          requestBody.attachments = attachmentsToSend.map(att => ({
+            type: att.type,
+            name: att.name,
+            data: att.data,
+            mimeType: att.mimeType
+          }));
+        }
+        
         const response = await fetch('/api/chat/agent', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ message: msg, session_id: chatSessionId, agent_id: activeAgentId })
+          body: JSON.stringify(requestBody)
         });
 
         addTraceLog(`[DEBUG] 收到响应, 状态码: ${response.status}`);
@@ -3283,7 +3356,15 @@
         addTraceLog(`[DEBUG] assistantText 长度: ${assistantText.length}, 内容: ${assistantText.substring(0, 100)}`);
 
         if (!assistantText.trim()) {
-          assistantEl.innerHTML = '<span class="text-text-muted">响应完成 (无文本输出)</span>';
+          const lastToolError = assistantEl?.dataset?.lastToolError || '';
+          const renderedFiles = assistantEl?.dataset?.fileHtml || '';
+          if (renderedFiles) {
+            assistantEl.innerHTML = (assistantEl.dataset.textHtml || '') + renderedFiles + (assistantEl.dataset.errorHtml || '');
+          } else if (lastToolError) {
+            assistantEl.innerHTML = marked.parse(lastToolError);
+          } else {
+            assistantEl.innerHTML = '<span class="text-text-muted">响应完成 (无文本输出)</span>';
+          }
           addTraceLog(`[WARN] 没有收到任何文本内容`);
         }
         addTraceLog('[AGENT] 响应完成');
@@ -3304,7 +3385,8 @@
       switch (eventType) {
         case 'text':
           if (assistantEl) {
-            assistantEl.innerHTML = marked.parse(currentText);
+            assistantEl.dataset.textHtml = marked.parse(stripOutboundMediaMarkers(currentText));
+            assistantEl.innerHTML = assistantEl.dataset.textHtml + (assistantEl.dataset.fileHtml || '') + (assistantEl.dataset.errorHtml || '');
             const chatContainer = document.getElementById('chatMessages');
             chatContainer.scrollTop = chatContainer.scrollHeight;
           }
@@ -3313,7 +3395,18 @@
           addTraceLog(`[TOOL] 执行 ${data.tool}...`);
           break;
         case 'tool_complete':
-          addTraceLog(`[TOOL] ${data.tool} 完成`);
+          addTraceLog(`[TOOL] ${data.tool} 完成${data.is_error ? ' (失败)' : ''}`);
+          if (data.is_error && assistantEl) {
+            const output = String(data.output || '').trim();
+            const clipped = output.length > 1200 ? output.slice(0, 1200).trimEnd() + '...' : output;
+            const message = clipped
+              ? `处理没有完成：\`${data.tool || 'tool'}\` 执行失败。\n\n最近错误：${clipped}`
+              : `处理没有完成：\`${data.tool || 'tool'}\` 执行失败，但没有返回可用错误信息。`;
+            assistantEl.dataset.lastToolError = message;
+            if (!currentText.trim()) {
+              assistantEl.innerHTML = marked.parse(message);
+            }
+          }
           break;
         case 'status':
           addTraceLog(`[STATUS] ${data.message}`);
@@ -3321,7 +3414,36 @@
         case 'error':
           addTraceLog(`[ERROR] ${data.message}`);
           if (assistantEl) {
-            assistantEl.innerHTML = `<span class="text-red-400">错误: ${escapeHtml(data.message)}</span>`;
+            const errorHtml = `<div class="mt-2 text-red-400">错误: ${escapeHtml(data.message)}</div>`;
+            if (assistantEl.dataset.fileHtml) {
+              assistantEl.dataset.errorHtml = errorHtml;
+              assistantEl.innerHTML = (assistantEl.dataset.textHtml || '') + assistantEl.dataset.fileHtml + errorHtml;
+            } else {
+              assistantEl.innerHTML = errorHtml;
+            }
+          }
+          break;
+        case 'file':
+          addTraceLog(`[FILE] 收到文件: ${data.name}, type=${data.type}, size=${data.size}`);
+          if (assistantEl) {
+            const fileType = data.type || 'file';
+            const fileName = data.name || 'unknown';
+            const fileData = data.data || '';
+            
+            addTraceLog(`[FILE] 处理类型: ${fileType}, 是否为图片: ${['image', 'photo'].includes(fileType)}`);
+            
+            let fileHtml = '';
+            if (['image', 'photo'].includes(fileType)) {
+              fileHtml = `<div class="mt-2"><img src="data:image/jpeg;base64,${fileData}" alt="${escapeHtml(fileName)}" class="max-w-xs rounded-lg shadow-md" /></div>`;
+            } else if (fileType === 'voice' || fileType === 'audio') {
+              fileHtml = `<div class="mt-2"><audio controls class="w-full max-w-xs"><source src="data:audio/mpeg;base64,${fileData}"></audio><div class="text-xs text-text-muted mt-1">${escapeHtml(fileName)}</div></div>`;
+            } else {
+              fileHtml = `<div class="mt-2"><a href="data:application/octet-stream;base64,${fileData}" download="${escapeHtml(fileName)}" class="inline-flex items-center px-3 py-2 bg-primary/10 text-primary rounded-lg hover:bg-primary/20 transition-colors"><svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>${escapeHtml(fileName)}</a></div>`;
+            }
+            assistantEl.dataset.fileHtml = (assistantEl.dataset.fileHtml || '') + fileHtml;
+            assistantEl.innerHTML = (assistantEl.dataset.textHtml || '') + assistantEl.dataset.fileHtml + (assistantEl.dataset.errorHtml || '');
+            const chatContainer = document.getElementById('chatMessages');
+            chatContainer.scrollTop = chatContainer.scrollHeight;
           }
           break;
         case 'done':
@@ -3347,6 +3469,168 @@
       div.textContent = text;
       return div.innerHTML;
     }
+
+    function stripOutboundMediaMarkers(text) {
+      return String(text || '')
+        .replace(/\[(attachment|file|document|image|photo|video|audio|voice|audio-file|media):\s*[^\]\n]+?\s*\]/gi, '')
+        .replace(/\n{3,}/g, '\n\n')
+        .trim();
+    }
+
+    function handleFileSelect(event) {
+      const files = Array.from(event.target.files);
+      files.forEach(file => {
+        const reader = new FileReader();
+        reader.onload = function(e) {
+          pendingAttachments.push({
+            type: 'file',
+            name: file.name,
+            size: file.size,
+            data: e.target.result,
+            mimeType: file.type
+          });
+          renderAttachmentPreview();
+        };
+        reader.readAsDataURL(file);
+      });
+      event.target.value = '';
+    }
+
+    function handleImageSelect(event) {
+      const files = Array.from(event.target.files);
+      files.forEach(file => {
+        const reader = new FileReader();
+        reader.onload = function(e) {
+          pendingAttachments.push({
+            type: 'image',
+            name: file.name,
+            size: file.size,
+            data: e.target.result,
+            mimeType: file.type
+          });
+          renderAttachmentPreview();
+        };
+        reader.readAsDataURL(file);
+      });
+      event.target.value = '';
+    }
+
+    function renderAttachmentPreview() {
+      const preview = document.getElementById('attachmentPreview');
+      const content = document.getElementById('attachmentPreviewContent');
+      
+      if (pendingAttachments.length === 0) {
+        preview.classList.add('hidden');
+        return;
+      }
+      
+      preview.classList.remove('hidden');
+      content.innerHTML = pendingAttachments.map((att, index) => {
+        if (att.type === 'image') {
+          return `
+            <div class="relative group">
+              <img src="${att.data}" class="w-20 h-20 object-cover rounded-lg border border-dark-border" alt="${escapeHtml(att.name)}">
+              <button onclick="removeAttachment(${index})" class="absolute -top-2 -right-2 w-5 h-5 bg-red-500 text-white rounded-full text-xs flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">×</button>
+            </div>
+          `;
+        } else if (att.type === 'voice') {
+          return `
+            <div class="relative group flex items-center gap-2 px-3 py-2 bg-dark-card border border-accent-purple/30 rounded-lg">
+              <svg class="w-4 h-4 text-accent-purple" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"/></svg>
+              <span class="text-xs text-text-primary">语音消息</span>
+              <button onclick="removeAttachment(${index})" class="w-5 h-5 bg-red-500 text-white rounded-full text-xs flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">×</button>
+            </div>
+          `;
+        } else {
+          return `
+            <div class="relative group flex items-center gap-2 px-3 py-2 bg-dark-card border border-dark-border rounded-lg">
+              <svg class="w-4 h-4 text-accent-green" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+              <div class="flex-1 min-w-0">
+                <div class="text-xs text-text-primary truncate">${escapeHtml(att.name)}</div>
+                <div class="text-xs text-text-muted">${formatFileSize(att.size)}</div>
+              </div>
+              <button onclick="removeAttachment(${index})" class="w-5 h-5 bg-red-500 text-white rounded-full text-xs flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">×</button>
+            </div>
+          `;
+        }
+      }).join('');
+    }
+
+    function removeAttachment(index) {
+      pendingAttachments.splice(index, 1);
+      renderAttachmentPreview();
+    }
+
+    function formatFileSize(bytes) {
+      if (bytes < 1024) return bytes + ' B';
+      if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+      return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+    }
+
+    async function toggleVoiceRecording() {
+      if (isRecordingVoice) {
+        stopVoiceRecording();
+      } else {
+        await startVoiceRecording();
+      }
+    }
+
+    async function startVoiceRecording() {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        mediaRecorder = new MediaRecorder(stream);
+        voiceRecordChunks = [];
+        
+        mediaRecorder.ondataavailable = function(e) {
+          voiceRecordChunks.push(e.data);
+        };
+        
+        mediaRecorder.onstop = function() {
+          const blob = new Blob(voiceRecordChunks, { type: 'audio/webm' });
+          const reader = new FileReader();
+          reader.onload = function(e) {
+            pendingAttachments.push({
+              type: 'voice',
+              name: 'voice_message.webm',
+              size: blob.size,
+              data: e.target.result,
+              mimeType: 'audio/webm'
+            });
+            renderAttachmentPreview();
+          };
+          reader.readAsDataURL(blob);
+          
+          stream.getTracks().forEach(track => track.stop());
+        };
+        
+        mediaRecorder.start();
+        isRecordingVoice = true;
+        
+        const btn = document.getElementById('voiceRecordBtn');
+        btn.classList.add('bg-accent-purple/20', 'border-accent-purple');
+        btn.classList.remove('text-text-muted');
+        btn.classList.add('text-accent-purple');
+        
+        addTraceLog('[VOICE] 开始录音...');
+      } catch (e) {
+        console.error('Failed to start recording:', e);
+        addTraceLog('[VOICE] 录音失败: ' + e.message);
+      }
+    }
+
+    function stopVoiceRecording() {
+      if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+        mediaRecorder.stop();
+      }
+      isRecordingVoice = false;
+      
+      const btn = document.getElementById('voiceRecordBtn');
+      btn.classList.remove('bg-accent-purple/20', 'border-accent-purple', 'text-accent-purple');
+      btn.classList.add('text-text-muted');
+      
+      addTraceLog('[VOICE] 录音完成');
+    }
+
 
     // Web Search Configuration
     async function loadWebSearchSettings() {

@@ -234,17 +234,20 @@ def _resolve_api_client_from_settings(settings) -> SupportsStreamingMessages:
             auth_token_resolver=lambda: settings.resolve_auth().value,
         )
     if settings.api_format in ("openai", "openai_compat"):
-        if _is_local_openai_base_url(settings.base_url) and not settings.api_key:
+        check_local_server = _is_local_openai_base_url(settings.base_url)
+        if check_local_server and not settings.api_key:
             return OpenAICompatibleClient(
                 api_key="openharness-local",
                 base_url=settings.base_url,
                 timeout=settings.timeout,
+                check_local_server=True,
             )
         auth = _safe_resolve_auth()
         return OpenAICompatibleClient(
             api_key=auth.value,
             base_url=settings.base_url,
             timeout=settings.timeout,
+            check_local_server=check_local_server,
         )
     auth = _safe_resolve_auth()
     return AnthropicApiClient(

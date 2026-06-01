@@ -901,8 +901,23 @@ class WebConfigSmartChannelBridge:
         return output_dir.resolve()
 
     def _with_social_output_instructions(self, content: str, output_dir: Path) -> str:
+        skill_lines: list[str] = []
+        try:
+            from openharness.skills import load_skill_registry
+
+            for skill in load_skill_registry(self._cwd).list_skills():
+                command_name = skill.command_name or skill.name
+                base = f" at {skill.base_dir}" if skill.base_dir else ""
+                skill_lines.append(f"- {command_name}{base}: {skill.description}")
+        except Exception:
+            logger.exception("Failed to load skills for social prompt")
+
+        skill_text = ""
+        if skill_lines:
+            skill_text = "\n\n可用 skills：\n" + "\n".join(skill_lines[:20])
+
         return (
-            f"{content.rstrip()}{SOCIAL_OUTPUT_INSTRUCTIONS}\n"
+            f"{content.rstrip()}{skill_text}{SOCIAL_OUTPUT_INSTRUCTIONS}\n"
             f"本次消息的社交输出目录是：{output_dir}\n"
             "如果调用工具或 MCP 生成音频、图片、压缩包、文档等文件，请把 output/output_path/path/目录参数设置到这个目录下。"
         )

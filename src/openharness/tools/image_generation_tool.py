@@ -80,7 +80,10 @@ class ImageGenerationTool(BaseTool):
         "Use this for bitmap assets such as photos, illustrations, sprites, mockups, "
         "transparent cutouts, or edited local images. Supports provider='codex' for "
         "Codex hosted image_generation with Codex subscription auth, and provider='openai' "
-        "for OpenAI-compatible key/base_url image APIs."
+        "for OpenAI-compatible key/base_url image APIs. Do not use this for deterministic "
+        "file transformations such as resizing, cropping, format conversion, document/media "
+        "extraction, or scripted workflows when a dedicated skill or command-line tool is "
+        "available; prefer the matching skill/tool instead."
     )
     input_model = ImageGenerationToolInput
 
