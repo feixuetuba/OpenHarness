@@ -380,7 +380,11 @@ async def _skill_command_handler(args: str, context: CommandContext, *, skill_na
             )
         )
     prompt = _render_skill_command_prompt(skill, args, getattr(context, "session_id", None))
-    return CommandResult(submit_prompt=prompt, submit_model=skill.model)
+    return CommandResult(
+        message=f"正在执行技能: {skill_name}",
+        submit_prompt=prompt,
+        submit_model=skill.model,
+    )
 
 
 def _make_skill_slash_command(skill_name: str, description: str) -> SlashCommand:
@@ -452,9 +456,85 @@ def create_default_command_registry(
         del context
         return CommandResult(message=registry.help_text())
 
+    async def _list_handler(_: str, context: CommandContext) -> CommandResult:
+        del context
+        lines = ["可用指令列表："]
+        command_descriptions = {
+            "help": "显示可用指令",
+            "exit": "退出 OpenHarness",
+            "quit": "退出 OpenHarness（exit 的别名）",
+            "clear": "清除对话历史",
+            "clean": "清除对话历史（clear 的别名）",
+            "version": "显示已安装的 OpenHarness 版本",
+            "status": "显示会话状态",
+            "context": "显示当前运行时系统提示词",
+            "summary": "总结对话历史",
+            "compact": "压缩较早的对话历史",
+            "cost": "显示 Token 使用量和预估费用",
+            "usage": "显示使用量和 Token 估算",
+            "stats": "显示会话统计信息",
+            "dream": "整合记忆",
+            "memory": "查看和管理项目记忆",
+            "hooks": "显示已配置的钩子",
+            "resume": "恢复最近保存的会话",
+            "session": "查看当前会话存储",
+            "export": "导出当前对话记录",
+            "share": "创建可分享的快照",
+            "copy": "复制最新回复或提供的文本",
+            "tag": "创建当前会话的命名快照",
+            "rewind": "移除最近的对话轮次",
+            "files": "列出当前工作区的文件",
+            "init": "初始化项目 OpenHarness 文件",
+            "bridge": "查看桥接助手并生成桥接会话",
+            "login": "显示认证状态或存储 API 密钥",
+            "logout": "清除已存储的 API 密钥",
+            "feedback": "保存 CLI 反馈到本地日志",
+            "onboarding": "显示快速入门指南",
+            "skills": "列出或显示可用技能",
+            "config": "显示或更新配置",
+            "mcp": "显示 MCP 状态",
+            "plugin": "管理插件",
+            "reload-plugins": "重新加载当前工作区的插件发现",
+            "permissions": "显示或更新权限模式",
+            "plan": "切换计划权限模式",
+            "fast": "显示或更新快速模式",
+            "effort": "显示或更新推理强度",
+            "passes": "显示或更新推理轮数",
+            "turns": "显示或更新最大智能体轮数",
+            "continue": "继续之前被中断的工具循环",
+            "stop": "从 TUI/ohmo 渠道中断正在运行的轮次",
+            "provider": "显示或切换提供者配置",
+            "model": "显示、切换或管理配置模型",
+            "theme": "列出、设置、显示或预览 TUI 主题",
+            "output-style": "显示或更新输出样式",
+            "keybindings": "显示已解析的快捷键绑定",
+            "vim": "显示或更新 Vim 模式",
+            "voice": "显示或更新语音模式",
+            "doctor": "显示环境诊断信息",
+            "diff": "显示 git diff 输出",
+            "branch": "显示 git 分支信息",
+            "commit": "显示状态或创建 git 提交",
+            "issue": "显示或更新项目问题上下文",
+            "pr_comments": "显示或更新项目 PR 评论上下文",
+            "privacy-settings": "显示本地隐私和存储设置",
+            "rate-limit-options": "显示降低提供者速率压力的方法",
+            "release-notes": "显示最近的 OpenHarness 发布说明",
+            "upgrade": "显示升级说明",
+            "agents": "列出或检查智能体和队友任务",
+            "subagents": "显示子智能体用法并检查工作线程任务",
+            "tasks": "管理后台任务",
+            "autopilot": "管理仓库自动驾驶接收和上下文",
+            "ship": "排队并执行 ohmo 驱动的仓库任务",
+            "list": "列出所有支持的指令及中文说明",
+        }
+        for name in registry.list_commands():
+            desc = command_descriptions.get(name.name, name.description)
+            lines.append(f"/{name.name:<16} {desc}")
+        return CommandResult(message="\n".join(lines))
+
     async def _exit_handler(_: str, context: CommandContext) -> CommandResult:
         del context
-        return CommandResult(should_exit=True)
+        return CommandResult(message="正在退出 OpenHarness...", should_exit=True)
 
     async def _clear_handler(_: str, context: CommandContext) -> CommandResult:
         context.engine.clear()
@@ -2319,10 +2399,13 @@ def create_default_command_registry(
         )
 
     registry.register(SlashCommand("help", "Show available commands", _help_handler))
+    registry.register(SlashCommand("list", "List all supported commands with Chinese descriptions", _list_handler))
     registry.register(
         SlashCommand("exit", "Exit OpenHarness", _exit_handler, aliases=("quit",))
     )
-    registry.register(SlashCommand("clear", "Clear conversation history", _clear_handler))
+    registry.register(
+        SlashCommand("clear", "Clear conversation history", _clear_handler, aliases=("clean",))
+    )
     registry.register(SlashCommand("version", "Show the installed OpenHarness version", _version_handler))
     registry.register(SlashCommand("status", "Show session status", _status_handler))
     registry.register(SlashCommand("context", "Show the active runtime system prompt", _context_handler))
