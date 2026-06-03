@@ -137,15 +137,14 @@ class PermissionChecker:
         if self._settings.mode == PermissionMode.PLAN:
             return PermissionDecision(
                 allowed=False,
-                reason="Plan mode blocks mutating tools until the user exits plan mode",
+                reason=f"Plan 模式阻止工具 '{tool_name}' 执行，请退出 plan 模式后再试",
             )
 
         # Default mode: require confirmation for mutating tools
         bash_hint = _bash_permission_hint(command)
         reason = (
-            "Mutating tools require user confirmation in default mode. "
-            "Approve the prompt when asked, or run /permissions full_auto "
-            "if you want to allow them for this session."
+            f"工具 '{tool_name}' 需要您的确认才能执行。"
+            "请在提示时批准，或运行 /permissions full_auto 允许所有工具在此会话中运行。"
         )
         if bash_hint:
             reason = f"{reason} {bash_hint}"

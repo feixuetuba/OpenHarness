@@ -43,6 +43,10 @@ class AgentTool(BaseTool):
     description = "Spawn a local background agent task."
     input_model = AgentToolInput
 
+    def is_read_only(self, arguments: AgentToolInput) -> bool:
+        del arguments
+        return True
+
     async def execute(self, arguments: AgentToolInput, context: ToolExecutionContext) -> ToolResult:
         try:
             subagent_depth = int(context.metadata.get("subagent_depth") or 0)
