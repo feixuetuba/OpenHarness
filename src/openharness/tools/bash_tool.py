@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import os
+import re
 from pathlib import Path
 from typing import Iterable
 
@@ -10,6 +12,7 @@ from pydantic import BaseModel, Field
 
 from openharness.sandbox import SandboxUnavailableError
 from openharness.tools.base import BaseTool, ToolExecutionContext, ToolResult
+from openharness.tools.path_aliases import expand_path_alias, path_aliases
 from openharness.utils.shell import create_shell_subprocess
 
 
@@ -32,8 +35,12 @@ class BashTool(BaseTool):
     input_model = BashToolInput
 
     async def execute(self, arguments: BashToolInput, context: ToolExecutionContext) -> ToolResult:
-        cwd = Path(arguments.cwd).expanduser() if arguments.cwd else context.cwd
-        preflight_error = _preflight_interactive_command(arguments.command)
+        aliases = _path_aliases(context.cwd)
+        cwd = Path(_expand_path_alias(arguments.cwd, aliases)).expanduser() if arguments.cwd else context.cwd
+        env = dict(os.environ)
+        env.update(aliases)
+        command = _normalize_noninteractive_command(arguments.command)
+        preflight_error = _preflight_interactive_command(command)
         if preflight_error is not None:
             return ToolResult(
                 output=preflight_error,
@@ -43,12 +50,13 @@ class BashTool(BaseTool):
         process: asyncio.subprocess.Process | None = None
         try:
             process = await create_shell_subprocess(
-                arguments.command,
+                command,
                 cwd=cwd,
                 prefer_pty=True,
                 stdin=asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
+                env=env,
             )
         except SandboxUnavailableError as exc:
             return ToolResult(output=str(exc), is_error=True)
@@ -66,7 +74,7 @@ class BashTool(BaseTool):
             return ToolResult(
                 output=_format_timeout_output(
                     output_buffer,
-                    command=arguments.command,
+                    command=command,
                     timeout_seconds=arguments.timeout_seconds,
                 ),
                 is_error=True,
@@ -150,6 +158,32 @@ def _format_timeout_output(output_buffer: bytearray, *, command: str, timeout_se
     if hint:
         parts.extend(["", hint])
     return "\n".join(parts)
+
+
+def _path_aliases(cwd: Path) -> dict[str, str]:
+    return path_aliases(cwd)
+
+
+def _expand_path_alias(path: str | None, aliases: dict[str, str]) -> str:
+    return expand_path_alias(path, aliases)
+
+
+def _normalize_noninteractive_command(command: str) -> str:
+    stripped = command.strip()
+    if not stripped:
+        return command
+    match = re.match(r"^(\s*(?:\S*/)?ffmpeg)(?=\s|$)(.*)$", command, flags=re.DOTALL)
+    if not match:
+        return command
+    args = match.group(2)
+    inserts: list[str] = []
+    if not re.search(r"(?<!\S)-(?:y|n)(?!\S)", args):
+        inserts.append("-y")
+    if not re.search(r"(?<!\S)-nostdin(?!\S)", args):
+        inserts.insert(0, "-nostdin")
+    if not inserts:
+        return command
+    return f"{match.group(1)} {' '.join(inserts)}{args}"
 
 
 def _preflight_interactive_command(command: str) -> str | None:

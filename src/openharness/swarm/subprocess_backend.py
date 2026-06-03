@@ -56,6 +56,7 @@ class SubprocessBackend:
             model=config.model,
             system_prompt=config.system_prompt,
             system_prompt_mode=config.system_prompt_mode,
+            permission_mode=config.permission_mode,
             plan_mode_required=config.plan_mode_required,
         )
         # Only inject the inherited teammate env vars when we are also

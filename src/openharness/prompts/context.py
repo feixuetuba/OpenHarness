@@ -51,8 +51,7 @@ def _build_skills_section(
     for skill in skills:
         command_name = skill.command_name or skill.name
         display = f" ({skill.display_name})" if skill.display_name else ""
-        path_info = f" [installed at: {skill.base_dir}]" if skill.base_dir else ""
-        lines.append(f"- **{command_name}**{display}{path_info}: {skill.description}")
+        lines.append(f"- **{command_name}**{display}: {skill.description}")
     return "\n".join(lines)
 
 

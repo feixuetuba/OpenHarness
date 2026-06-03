@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field
 
 from openharness.api.openai_client import OpenAICompatibleClient
 from openharness.tools.base import BaseTool, ToolExecutionContext, ToolResult
+from openharness.tools.path_aliases import resolve_path
 
 log = logging.getLogger(__name__)
 
@@ -66,7 +67,9 @@ class ImageToTextTool(BaseTool):
     description = (
         "Convert an image to a detailed text description using a vision-capable model. "
         "Use this when you need to understand the content of an image but your current "
-        "model does not support image input."
+        "model does not support image input. This tool only returns text; it does not "
+        "edit, resize, crop, transform, generate, or save image files. For deterministic "
+        "image processing, use an appropriate skill or script instead."
     )
     input_model = ImageToTextToolInput
 
@@ -147,10 +150,7 @@ class ImageToTextTool(BaseTool):
             return arguments.image_data, arguments.media_type
 
         if arguments.image_path:
-            path = Path(arguments.image_path)
-            if not path.is_absolute():
-                path = context.cwd / path
-            path = path.expanduser().resolve()
+            path = resolve_path(context.cwd, arguments.image_path)
 
             if not path.exists():
                 log.warning("image_to_text: image not found at %s", path)

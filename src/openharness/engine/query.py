@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 import os
 import re
@@ -52,7 +53,7 @@ log = logging.getLogger(__name__)
 DEFAULT_TOOL_TIMEOUT_SECONDS = 600.0
 
 
-PermissionPrompt = Callable[[str, str], Awaitable[bool]]
+PermissionPrompt = Callable[..., Awaitable[bool]]
 AskUserPrompt = Callable[[str], Awaitable[str]]
 
 MAX_TRACKED_READ_FILES = 6
@@ -340,6 +341,41 @@ def _parse_spawned_agent_identity(
     return match.group(1).strip(), match.group(2).strip()
 
 
+def _parse_created_local_agent_task(
+    output: str,
+    metadata: dict[str, object] | None = None,
+) -> tuple[str, str] | None:
+    if isinstance(metadata, dict):
+        agent_id = str(metadata.get("agent_id") or "").strip()
+        task_id = str(metadata.get("task_id") or "").strip()
+        task_type = str(metadata.get("task_type") or "").strip()
+        if task_id and task_type == "local_agent":
+            return agent_id or task_id, task_id
+    match = re.search(r"Created task (\S+) \(local_agent\)", output.strip())
+    if match is None:
+        return None
+    task_id = match.group(1).strip()
+    return task_id, task_id
+
+
+def _parse_created_local_bash_task(
+    output: str,
+    metadata: dict[str, object] | None = None,
+) -> tuple[str, str] | None:
+    """Parse task_id from local_bash task creation output/metadata."""
+    if isinstance(metadata, dict):
+        task_id = str(metadata.get("task_id") or "").strip()
+        task_type = str(metadata.get("task_type") or "").strip()
+        if task_id and task_type == "local_bash":
+            # local_bash has no agent_id, use task_id for both
+            return task_id, task_id
+    match = re.search(r"Created task (\S+) \(local_bash\)", output.strip())
+    if match is None:
+        return None
+    task_id = match.group(1).strip()
+    return task_id, task_id
+
+
 def _remember_async_agent_task(
     tool_metadata: dict[str, object] | None,
     *,
@@ -348,9 +384,17 @@ def _remember_async_agent_task(
     output: str,
     result_metadata: dict[str, object] | None = None,
 ) -> None:
-    if tool_name != "agent":
-        return
-    identity = _parse_spawned_agent_identity(output, result_metadata)
+    if tool_name == "agent":
+        identity = _parse_spawned_agent_identity(output, result_metadata)
+    elif tool_name == "task_create" and str(tool_input.get("type") or "").strip() == "local_agent":
+        identity = _parse_spawned_agent_identity(output, result_metadata) or _parse_created_local_agent_task(
+            output,
+            result_metadata,
+        )
+    elif tool_name == "task_create" and str(tool_input.get("type") or "").strip() == "local_bash":
+        identity = _parse_created_local_bash_task(output, result_metadata)
+    else:
+        identity = None
     if identity is None:
         return
     agent_id, task_id = identity
@@ -431,7 +475,10 @@ def _record_tool_carryover(
         if skill_name:
             _remember_active_artifact(context.tool_metadata, f"skill:{skill_name}")
             _remember_verified_work(context.tool_metadata, f"Loaded skill {skill_name}")
-    elif tool_name in {"agent", "send_message"}:
+    elif tool_name in {"agent", "send_message"} or (
+        tool_name == "task_create"
+        and str(tool_input.get("type") or "").strip() in {"local_agent", "local_bash"}
+    ):
         _remember_async_agent_activity(
             context.tool_metadata,
             tool_name=tool_name,
@@ -501,7 +548,10 @@ def _record_tool_carryover(
             context.tool_metadata,
             entry=f"Loaded skill {str(tool_input.get('name') or '').strip()}",
         )
-    elif tool_name in {"agent", "send_message"}:
+    elif tool_name in {"agent", "send_message"} or (
+        tool_name == "task_create"
+        and str(tool_input.get("type") or "").strip() in {"local_agent", "local_bash"}
+    ):
         _remember_work_log(
             context.tool_metadata,
             entry=f"Async agent action via {tool_name}",
@@ -954,12 +1004,20 @@ async def _execute_tool_call(
                         "reason": decision.reason,
                     },
                 )
-            confirmed = await context.permission_prompt(tool_name, decision.reason)
+            confirmed = await _call_permission_prompt(
+                context.permission_prompt,
+                tool_name,
+                decision.reason,
+                tool_input,
+            )
             if not confirmed:
                 log.debug("permission denied by user for %s", tool_name)
+                denied = ""
+                if isinstance(context.tool_metadata, dict):
+                    denied = str(context.tool_metadata.pop("last_permission_denied", "") or "").strip()
                 return ToolResultBlock(
                     tool_use_id=tool_use_id,
-                    content=decision.reason or f"Permission denied for {tool_name}",
+                    content=denied or f"User denied permission for {tool_name}",
                     is_error=True,
                 )
         else:
@@ -1050,6 +1108,25 @@ async def _execute_tool_call(
             },
         )
     return tool_result
+
+
+async def _call_permission_prompt(
+    prompt: PermissionPrompt,
+    tool_name: str,
+    reason: str,
+    tool_input: dict[str, object],
+) -> bool:
+    try:
+        signature = inspect.signature(prompt)
+        accepts_tool_input = any(
+            param.kind == inspect.Parameter.VAR_POSITIONAL
+            for param in signature.parameters.values()
+        ) or len(signature.parameters) >= 3
+    except (TypeError, ValueError):
+        accepts_tool_input = False
+    if accepts_tool_input:
+        return bool(await prompt(tool_name, reason, tool_input))
+    return bool(await prompt(tool_name, reason))
 
 
 def _resolve_permission_file_path(

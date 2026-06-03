@@ -561,6 +561,7 @@ class SocialPlatformConfig(BaseModel):
     enabled: bool = False
     social_file_base_url: str = ""
     social_file_token: str = ""
+    social_auto_approve_tools: bool = False
     wechat_enabled: bool = False
     wechat_api_url: str = ""
     wechat_app_id: str = ""
@@ -596,13 +597,17 @@ class SearchApiConfig(BaseModel):
 
 class SkillManagementConfig(BaseModel):
     """Configuration for skill management."""
-    
+
     enabled: bool = True
     auto_reload: bool = False
     debug_mode: bool = False
     skill_paths: list[str] = Field(default_factory=lambda: ["skills", ".openharness/skills"])
     enabled_skills: list[str] = Field(default_factory=list)
     disabled_skills: list[str] = Field(default_factory=list)
+    auto_approve_skills: list[str] = Field(default_factory=list)
+    path_aliases: dict[str, str] = Field(
+        default_factory=lambda: {"USKILL": "~/.openharness/skills"}
+    )
 
 
 class SessionManagementConfig(BaseModel):

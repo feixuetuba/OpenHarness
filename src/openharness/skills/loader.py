@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import replace
 from pathlib import Path
 from typing import Iterable
 
@@ -45,24 +46,26 @@ def load_skill_registry(
     extra_skill_dirs: Iterable[str | Path] | None = None,
     extra_plugin_roots: Iterable[str | Path] | None = None,
     settings=None,
+    include_disabled: bool = False,
 ) -> SkillRegistry:
     """Load bundled, user-defined, project, and plugin skills."""
+    resolved_settings = settings or load_settings()
+    disabled_names = _disabled_skill_names(resolved_settings)
     registry = SkillRegistry()
     for skill in get_bundled_skills():
-        registry.register(skill)
+        _register_skill(registry, skill, disabled_names, include_disabled)
     for skill in load_user_skills():
-        registry.register(skill)
+        _register_skill(registry, skill, disabled_names, include_disabled)
     for skill in load_skills_from_dirs(extra_skill_dirs, source="user"):
-        registry.register(skill)
+        _register_skill(registry, skill, disabled_names, include_disabled)
 
-    resolved_settings = settings or load_settings()
     if cwd is not None and getattr(resolved_settings, "allow_project_skills", True):
         project_dirs = discover_project_skill_dirs(
             cwd,
             getattr(resolved_settings, "project_skill_dirs", list(_DEFAULT_PROJECT_SKILL_DIRS)),
         )
         for skill in load_skills_from_dirs(project_dirs, source="project", create_missing=False):
-            registry.register(skill)
+            _register_skill(registry, skill, disabled_names, include_disabled)
 
     if cwd is not None:
         from openharness.plugins.loader import load_plugins
@@ -71,8 +74,34 @@ def load_skill_registry(
             if not plugin.enabled:
                 continue
             for skill in plugin.skills:
-                registry.register(skill)
+                _register_skill(registry, skill, disabled_names, include_disabled)
     return registry
+
+
+def _disabled_skill_names(settings) -> set[str]:
+    skill_management = getattr(settings, "skill_management", None)
+    names = getattr(skill_management, "disabled_skills", None) if skill_management is not None else None
+    return {str(name).strip() for name in names or [] if str(name).strip()}
+
+
+def _skill_identifiers(skill: SkillDefinition) -> set[str]:
+    return {
+        str(value).strip()
+        for value in (skill.name, skill.command_name, skill.display_name, *skill.aliases)
+        if str(value).strip()
+    }
+
+
+def _register_skill(
+    registry: SkillRegistry,
+    skill: SkillDefinition,
+    disabled_names: set[str],
+    include_disabled: bool,
+) -> None:
+    disabled = bool(_skill_identifiers(skill) & disabled_names)
+    if disabled and not include_disabled:
+        return
+    registry.register(replace(skill, enabled=not disabled))
 
 
 def load_user_skills() -> list[SkillDefinition]:

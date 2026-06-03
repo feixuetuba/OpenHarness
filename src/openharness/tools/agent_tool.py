@@ -13,6 +13,7 @@ from openharness.swarm.registry import get_backend_registry
 from openharness.swarm.types import TeammateSpawnConfig
 from openharness.tasks import get_task_manager
 from openharness.tools.base import BaseTool, ToolExecutionContext, ToolResult
+from openharness.tools.skill_permission import infer_skill_from_text, skill_is_approved
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +68,12 @@ class AgentTool(BaseTool):
         # Resolve team and agent name for the swarm backend
         team = arguments.team or "default"
         agent_name = arguments.subagent_type or "agent"
+        target_skill = infer_skill_from_text(
+            f"{arguments.description}\n{arguments.prompt}",
+            context.cwd,
+            context.metadata,
+        )
+        permission_mode = "bypassPermissions" if skill_is_approved(target_skill, context.metadata) else None
 
         # Use subprocess backend so spawned agents are registered in
         # BackgroundTaskManager and are pollable by the task tools.
@@ -85,6 +92,7 @@ class AgentTool(BaseTool):
             command=arguments.command,
             system_prompt=agent_def.system_prompt if agent_def else None,
             permissions=agent_def.permissions if agent_def else [],
+            permission_mode=permission_mode,
             task_type=arguments.mode,
         )
 

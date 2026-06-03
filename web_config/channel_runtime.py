@@ -7,22 +7,33 @@ import json
 import logging
 import os
 import re
+import shutil
 import time
 from pathlib import Path
 from typing import Any
 
 from openharness.channels.bus.events import InboundMessage, OutboundMessage
 from openharness.channels.bus.queue import MessageBus
+from openharness.channels.impl.base import allocate_social_file, resolve_social_bot_dir
 from openharness.channels.impl.manager import ChannelManager
 from openharness.config.schema import Config
 from openharness.engine.stream_events import (
     AssistantTextDelta,
     AssistantTurnComplete,
+    CompactProgressEvent,
+    ErrorEvent,
+    StatusEvent,
     ToolExecutionCompleted,
     ToolExecutionStarted,
 )
 from openharness.engine.query_engine import QueryEngine
 from openharness.tools.base import ToolRegistry
+from openharness.tools.skill_permission import infer_skill_from_tool_call, skill_is_approved
+from openharness.ui.coordinator_drain import (
+    format_completed_task_notifications,
+    pending_async_agent_entries,
+    wait_for_completed_async_agent_entries,
+)
 from openharness.ui.runtime import RuntimeBundle, build_runtime, close_runtime, start_runtime
 
 logger = logging.getLogger(__name__)
@@ -37,24 +48,22 @@ OUTBOUND_MEDIA_RE = re.compile(
 PENDING_MEDIA_NOTICE_SECONDS = 30.0
 SOCIAL_ENGINE_EVENT_TIMEOUT_SECONDS = 180.0
 SOCIAL_DIAGNOSTIC_AGENT_TIMEOUT_SECONDS = 120.0
-MEDIA_WORDS = (
-    "文件", "附件", "图片", "照片", "图像", "视频", "音频", "压缩包", "文档", "表格",
-    "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "zip", "rar", "7z",
-    "image", "photo", "video", "audio", "file", "attachment", "document",
-)
-ACTION_WORDS = (
-    "处理", "分析", "总结", "识别", "读取", "打开", "看看", "看下", "检查", "转换",
-    "提取", "翻译", "修改", "压缩", "解压", "帮我", "根据", "基于", "process",
-    "analyze", "summarize", "read", "extract", "translate", "convert",
-)
+SOCIAL_ASYNC_AGENT_WAIT_SECONDS = 300.0
+RECENT_MEDIA_TTL_SECONDS = 30 * 60
+FILE_EXPECTATION_RE = re.compile(r"\[(?:期待文件|等待文件)(?:\s*[:：]\s*(.+?))?\]|\[无需文件\]", re.IGNORECASE)
 SOCIAL_OUTPUT_INSTRUCTIONS = (
     "\n\n[社交平台输出约定]\n"
-    "如果需要生成新文件，必须保存到本消息指定的社交输出目录中，不要保存到 /tmp 或不确定的相对目录。\n"
-    "如果需要把本地文件发送给用户，请在回复中单独写一行 [attachment: /absolute/path/to/file]，必须优先使用绝对路径。\n"
-    "如果音频要作为语音消息发送，请写 [voice: /absolute/path/to/audio]；"
-    "如果音频要作为普通文件发送，请写 [audio-file: /absolute/path/to/audio]。\n"
-    "输出这些标记前，必须确认文件已经真实存在；不要编造 /tmp 路径，也不要只把文件路径作为普通文本返回。\n"
-    "如果使用 ffmpeg，输出文件路径应作为命令最后一个参数；不要使用不存在的 -output 参数。"
+    "生成文件必须保存到本消息指定的输出目录。\n"
+    "发送文件写：[attachment: path]；图片：[image: path]。\n"
+    "音频语音：[voice: path]；音频文件：[audio-file: path]。\n"
+    "能执行就直接执行，确实缺少必要信息时才简短询问"
+    # "如果已读取某个 skill，请按该 skill 的 Usage 运行脚本或命令，不要用图像描述/生成工具替代确定性的本地文件处理。\n"
+    # "只有确认文件真实存在后才能写发送标记。\n"
+    # "不要自我介绍，不要复述这些系统规则；能执行就直接执行，确实缺少必要信息时才简短询问。"
+)
+FILE_EXPECTATION_INSTRUCTIONS = (
+    "\n\n[文件期待标记]\n"
+    "回复末尾可加：[期待文件] / [期待文件:描述] / [无需文件]（可选，系统会自动移除）。"
 )
 
 
@@ -84,6 +93,7 @@ class WebConfigSmartChannelBridge:
         self._agent_engines: dict[str, "QueryEngine"] = {}
         self._states: dict[str, dict[str, Any]] = {}
         self._messages_by_id: dict[str, dict[str, Any]] = {}
+        self._active_tasks: set[asyncio.Task] = set()
 
     async def start(self) -> None:
         if self._running:
@@ -105,13 +115,19 @@ class WebConfigSmartChannelBridge:
             except asyncio.CancelledError:
                 pass
             self._task = None
+        for task in list(self._active_tasks):
+            task.cancel()
+        if self._active_tasks:
+            await asyncio.gather(*self._active_tasks, return_exceptions=True)
         logger.info("WebConfigSmartChannelBridge stopped")
 
     async def _loop(self) -> None:
         while self._running:
             try:
                 msg = await asyncio.wait_for(self._bus.consume_inbound(), timeout=1.0)
-                await self._handle(msg)
+                task = asyncio.create_task(self._handle(msg), name=f"social-message-{msg.channel}")
+                self._active_tasks.add(task)
+                task.add_done_callback(self._active_tasks.discard)
             except asyncio.TimeoutError:
                 continue
             except asyncio.CancelledError:
@@ -121,14 +137,45 @@ class WebConfigSmartChannelBridge:
 
     async def _handle(self, msg: InboundMessage) -> None:
         key = self._state_key(msg)
-        state = self._states.setdefault(key, {"pending_media": [], "pending_instruction": ""})
-        self._remember_message(msg)
+        state = self._states.setdefault(key, self._new_state())
 
         media_paths = self._extract_media_paths(msg)
+        if media_paths:
+            media_paths = self._normalize_inbound_media_paths(msg, media_paths)
+        self._remember_message(msg, media_paths=media_paths)
+        if media_paths:
+            state["recent_media"] = self._merge_recent_media(state.get("recent_media", []), msg, media_paths)
+            state["msg_counter"] += 1
+            state["conversation_files"].append({
+                "msg_index": state["msg_counter"],
+                "timestamp": time.time(),
+                "source": "user",
+                "media": list(media_paths),
+                "content": msg.content,
+            })
         text = self._strip_attachment_markers(msg.content).strip()
         quoted = self._resolve_quoted_message(msg)
         instruction = text if text and text != "[empty message]" else ""
         pending_media = list(state.get("pending_media") or [])
+
+        pending_permission = state.get("pending_permission")
+        if isinstance(pending_permission, dict):
+            future = pending_permission.get("future")
+            if isinstance(future, asyncio.Future) and not future.done():
+                response = self._permission_response(instruction)
+                if response is None:
+                    await self._publish_notice(msg, "请先回复“允许”或“拒绝”，以决定是否执行刚才的工具调用。")
+                    return
+                future.set_result(response)
+                state["pending_permission"] = None
+                self._social_debug(
+                    "permission_response",
+                    msg,
+                    tool=pending_permission.get("tool"),
+                    allowed=response,
+                )
+                await self._publish_notice(msg, "已允许，继续执行。" if response else "已拒绝，本次工具调用不会执行。")
+                return
 
         if self._is_unmentioned_group_message(msg) and not media_paths and not pending_media:
             logger.info(
@@ -136,6 +183,10 @@ class WebConfigSmartChannelBridge:
                 msg.channel,
                 msg.chat_id,
             )
+            return
+
+        if instruction and self._is_continue_request(instruction):
+            await self._process_now(msg, instruction, state=state)
             return
 
         if quoted and instruction:
@@ -148,15 +199,26 @@ class WebConfigSmartChannelBridge:
             final_instruction = self._combine_instruction(pending_instruction, instruction)
             pending_media = list(state.get("pending_media") or [])
             current = self._media_item(msg, media_paths)
+            state["active_media"] = [*pending_media, current]
             prompt = self._build_prompt(final_instruction, media_items=[*pending_media, current])
             await self._clear_state_and_process(state, msg, prompt)
             return
 
         if media_paths and not instruction:
+            # 检查 LLM 是否期待文件
+            expecting = state.get("expecting_file", {})
+            if expecting.get("active"):
+                current = self._media_item(msg, media_paths)
+                state["active_media"] = [current]
+                prompt = self._build_prompt_with_timeline(state)
+                await self._clear_state_and_process(state, msg, prompt)
+                return
+
             pending_instruction = str(state.get("pending_instruction") or "").strip()
             if pending_instruction:
                 pending_media = list(state.get("pending_media") or [])
                 current = self._media_item(msg, media_paths)
+                state["active_media"] = [*pending_media, current]
                 prompt = self._build_prompt(pending_instruction, media_items=[*pending_media, current])
                 await self._clear_state_and_process(state, msg, prompt)
                 return
@@ -168,25 +230,49 @@ class WebConfigSmartChannelBridge:
         if pending_media and instruction:
             pending_instruction = str(state.get("pending_instruction") or "").strip()
             final_instruction = self._combine_instruction(pending_instruction, instruction)
+            state["active_media"] = pending_media
             prompt = self._build_prompt(final_instruction, media_items=pending_media)
             await self._clear_state_and_process(state, msg, prompt)
             return
 
-        if instruction and self._looks_like_media_instruction(instruction):
-            state["pending_instruction"] = self._combine_instruction(str(state.get("pending_instruction") or ""), instruction)
-            self._schedule_notice(state, msg, "我还没有收到要处理的目标文件。请发送文件，或引用之前的文件/消息再说明要怎么处理。")
-            logger.info("Held media-related instruction awaiting file/reference: %s", instruction[:100])
+        active_media = self._recent_media_items(state.get("active_media", []))
+        if active_media and instruction:
+            pending_instruction = str(state.get("pending_instruction") or "").strip()
+            final_instruction = self._combine_instruction(pending_instruction, instruction)
+            prompt = self._build_prompt(final_instruction, media_items=active_media)
+            await self._clear_state_and_process(state, msg, prompt)
             return
 
-        await self._process_now(msg, msg.content)
+        recent_media = self._recent_media_items(state.get("recent_media", []))
+        if recent_media and instruction:
+            pending_instruction = str(state.get("pending_instruction") or "").strip()
+            final_instruction = self._combine_instruction(pending_instruction, instruction)
+            prompt = self._build_prompt(final_instruction, recent_media_items=recent_media)
+            await self._clear_state_and_process(state, msg, prompt)
+            return
+
+        await self._process_now(msg, msg.content, state=state)
+
+    @staticmethod
+    def _new_state() -> dict[str, Any]:
+        return {
+            "conversation_files": [],
+            "msg_counter": 0,
+            "pending_media": [],
+            "pending_instruction": "",
+            "recent_media": [],
+            "active_media": [],
+            "expecting_file": {"active": False, "description": ""},
+            "last_output_snapshot": set(),
+        }
 
     async def _clear_state_and_process(self, state: dict[str, Any], msg: InboundMessage, prompt: str) -> None:
         self._cancel_notice(state)
         state["pending_media"] = []
         state["pending_instruction"] = ""
-        await self._process_now(msg, prompt)
+        await self._process_now(msg, prompt, state=state)
 
-    async def _process_now(self, msg: InboundMessage, content: str) -> None:
+    async def _process_now(self, msg: InboundMessage, content: str, *, state: dict[str, Any] | None = None) -> None:
         logger.info(
             "WebConfigSmartChannelBridge processing %s/%s, content=%s",
             msg.channel,
@@ -208,10 +294,15 @@ class WebConfigSmartChannelBridge:
 
         reply_parts: list[str] = []
         output_dir = self._ensure_social_output_dir(msg)
+        active_skills: set[str] = set()
+        self._configure_engine_permissions_for_message(engine, msg, active_skills)
         tool_call_count = 0
         tool_names: list[str] = []
+        tool_input_queue: dict[str, list[dict[str, Any]]] = {}
         tool_errors: list[dict[str, Any]] = []
         full_prompt = self._with_social_output_instructions(content, output_dir)
+        input_media_paths = self._resolve_media_paths_from_text(content)
+        continuation_requested = self._is_continue_request(content)
         logger.info(
             "Social model prompt channel=%s chat_id=%s sender=%s output_dir=%s prompt=%s",
             msg.channel,
@@ -227,7 +318,18 @@ class WebConfigSmartChannelBridge:
             prompt=self._truncate_log_text(full_prompt, limit=4000),
         )
         try:
-            stream = engine.submit_message(full_prompt).__aiter__()
+            if continuation_requested and engine.has_pending_continuation():
+                self._social_debug("continue_pending_start", msg, output_dir=str(output_dir))
+                stream = engine.continue_pending().__aiter__()
+            else:
+                # Chat channels keep media continuity in the bridge state. Keep
+                # model history short so local 8k-context providers do not carry
+                # old tool results into unrelated social messages.
+                engine.clear()
+                self._social_debug("engine_history_cleared", msg, reason="fresh_social_message")
+                stream = engine.submit_message(full_prompt).__aiter__()
+            auto_continued_after_empty = False
+            async_drain_count = 0
             while True:
                 try:
                     event = await asyncio.wait_for(
@@ -235,6 +337,21 @@ class WebConfigSmartChannelBridge:
                         timeout=self._engine_event_timeout_seconds(),
                     )
                 except StopAsyncIteration:
+                    notification_payload = await self._drain_social_async_agents(
+                        engine,
+                        msg,
+                        drain_index=async_drain_count,
+                    )
+                    if notification_payload and async_drain_count < 3:
+                        async_drain_count += 1
+                        self._social_debug(
+                            "async_agent_notification_submit",
+                            msg,
+                            drain_index=async_drain_count,
+                            notification=self._truncate_log_text(notification_payload, limit=3000),
+                        )
+                        stream = engine.submit_message(notification_payload).__aiter__()
+                        continue
                     break
                 except asyncio.TimeoutError:
                     timeout_text = self._diagnose_stalled_turn(msg, tool_names, tool_errors)
@@ -272,11 +389,13 @@ class WebConfigSmartChannelBridge:
                         outbound_text, outbound_media, media_modes = self._extract_outbound_media(
                             diagnostic_reply,
                             base_dir=Path(self._cwd),
+                            input_media=input_media_paths,
                         )
                         outbound_media, media_modes, missing_media = self._filter_existing_outbound_media(
                             outbound_media,
                             media_modes,
                         )
+                        outbound_media, media_modes = self._normalize_social_media_paths(msg, outbound_media, media_modes)
                         if missing_media:
                             missing_text = "无法发送以下文件，因为路径不存在：\n" + "\n".join(f"- {path}" for path in missing_media)
                             outbound_text = f"{outbound_text}\n\n{missing_text}".strip() if outbound_text else missing_text
@@ -307,20 +426,87 @@ class WebConfigSmartChannelBridge:
                 elif isinstance(event, ToolExecutionStarted):
                     tool_call_count += 1
                     tool_names.append(event.tool_name)
+                    tool_input_queue.setdefault(event.tool_name, []).append(event.tool_input)
+                    skill_name = self._skill_name_from_tool_call(event)
+                    if skill_name:
+                        active_skills.add(skill_name)
                     self._log_tool_started(msg, event, output_dir)
                 elif isinstance(event, ToolExecutionCompleted):
                     self._log_tool_completed(msg, event)
+                    started_input = None
+                    queued_inputs = tool_input_queue.get(event.tool_name)
+                    if queued_inputs:
+                        started_input = queued_inputs.pop(0)
+                    if event.tool_name == "send_message" and isinstance(started_input, dict):
+                        forwarded = str(started_input.get("message") or "").strip()
+                        if forwarded and OUTBOUND_MEDIA_RE.search(forwarded):
+                            reply_parts.append(f"\n{forwarded}\n")
+                            self._social_debug(
+                                "captured_send_message_media_marker",
+                                msg,
+                                message=self._truncate_log_text(forwarded, limit=1000),
+                                tool_error=event.is_error,
+                            )
                     if event.is_error:
                         tool_errors.append({
                             "tool": event.tool_name,
                             "output": self._truncate_log_text(event.output, limit=1200),
                             "metadata": event.metadata or {},
                         })
+                elif isinstance(event, ErrorEvent):
+                    message = event.message.strip() or "Agent returned an error without details."
+                    self._social_debug(
+                        "engine_error",
+                        msg,
+                        message=self._truncate_log_text(message, limit=3000),
+                        recoverable=event.recoverable,
+                    )
+                    if "empty assistant message" in message.lower() and tool_names:
+                        if not auto_continued_after_empty and engine.has_pending_continuation():
+                            auto_continued_after_empty = True
+                            self._social_debug(
+                                "auto_continue_pending_after_empty",
+                                msg,
+                                tool_names=tool_names,
+                                output_dir=str(output_dir),
+                            )
+                            stream = engine.continue_pending(max_turns=3).__aiter__()
+                            continue
+                        else:
+                            reply_parts.append(
+                                "任务执行中断：模型在工具调用后返回了空消息。"
+                                "请重试一次，或让我继续执行刚才的工具结果。"
+                            )
+                    else:
+                        reply_parts.append(f"任务执行出错：{message}")
+                elif isinstance(event, StatusEvent):
+                    self._social_debug(
+                        "engine_status",
+                        msg,
+                        message=self._truncate_log_text(event.message, limit=1000),
+                    )
+                elif isinstance(event, CompactProgressEvent):
+                    self._social_debug(
+                        "engine_compact_progress",
+                        msg,
+                        phase=event.phase,
+                        trigger=event.trigger,
+                        message=self._truncate_log_text(event.message or "", limit=1000),
+                    )
         except Exception:
             logger.exception("Channel engine error for %s/%s", msg.channel, msg.chat_id)
             reply_parts = ["[Error: failed to process your message]"]
 
         reply_text = "".join(reply_parts).strip()
+
+        # 解析并移除文件期待标记
+        if state is not None:
+            expecting_file, cleaned_reply = self._parse_file_expectation_marker(reply_text)
+            state["expecting_file"] = expecting_file
+            if cleaned_reply != reply_text:
+                reply_text = cleaned_reply
+                reply_parts = [reply_text]
+
         logger.info(
             "Social assistant raw reply channel=%s chat_id=%s sender=%s tool_call_count=%s tool_names=%s reply=%s",
             msg.channel,
@@ -337,8 +523,13 @@ class WebConfigSmartChannelBridge:
             tool_names=tool_names,
             reply=self._truncate_log_text(reply_text, limit=5000),
         )
-        outbound_text, outbound_media, media_modes = self._extract_outbound_media(reply_text, base_dir=Path(self._cwd))
+        outbound_text, outbound_media, media_modes = self._extract_outbound_media(
+            reply_text,
+            base_dir=Path(self._cwd),
+            input_media=input_media_paths,
+        )
         outbound_media, media_modes, missing_media = self._filter_existing_outbound_media(outbound_media, media_modes)
+        outbound_media, media_modes = self._normalize_social_media_paths(msg, outbound_media, media_modes)
         logger.info(
             "Social outbound media channel=%s chat_id=%s sender=%s media=%s modes=%s missing=%s",
             msg.channel,
@@ -374,11 +565,13 @@ class WebConfigSmartChannelBridge:
                     outbound_text, outbound_media, media_modes = self._extract_outbound_media(
                         reply_text,
                         base_dir=Path(self._cwd),
+                        input_media=input_media_paths,
                     )
                     outbound_media, media_modes, missing_media = self._filter_existing_outbound_media(
                         outbound_media,
                         media_modes,
                     )
+                    outbound_media, media_modes = self._normalize_social_media_paths(msg, outbound_media, media_modes)
                     if missing_media:
                         missing_text = "无法发送以下文件，因为路径不存在：\n" + "\n".join(f"- {path}" for path in missing_media)
                         outbound_text = f"{outbound_text}\n\n{missing_text}".strip() if outbound_text else missing_text
@@ -393,10 +586,83 @@ class WebConfigSmartChannelBridge:
                 )
             else:
                 self._social_debug("empty_reply", msg, tool_names=tool_names)
-                outbound_text = "任务没有返回可发送的内容。请稍后重试，或补充更明确的处理要求。"
+                if tool_names and set(tool_names).issubset({"skill"}):
+                    outbound_text = (
+                        "任务还没有真正执行：模型只读取了 skill 说明，但没有继续运行对应脚本。"
+                        "请回复“继续”，我会接着执行。"
+                    )
+                else:
+                    outbound_text = "任务没有返回可发送的内容。请稍后重试，或补充更明确的处理要求。"
 
         self._append_assistant_session_message(msg, reply_text or outbound_text, agent_id)
+
+        # 记录 LLM 生成的输出文件到时间线
+        if state is not None:
+            output_files = self._scan_new_files_in_output_dir(output_dir, state.get("last_output_snapshot", set()))
+            if output_files:
+                state["msg_counter"] += 1
+                state["conversation_files"].append({
+                    "msg_index": state["msg_counter"],
+                    "timestamp": time.time(),
+                    "source": "assistant",
+                    "media": output_files,
+                    "content": (reply_text or outbound_text)[:200],
+                })
+                state["last_output_snapshot"] = set(output_files) | state.get("last_output_snapshot", set())
+
         await self._publish_reply(msg, outbound_text, media=outbound_media, media_modes=media_modes)
+
+    async def _drain_social_async_agents(
+        self,
+        engine: QueryEngine,
+        msg: InboundMessage,
+        *,
+        drain_index: int,
+    ) -> str:
+        pending = pending_async_agent_entries(engine.tool_metadata)
+        if not pending:
+            return ""
+        if drain_index >= 3:
+            self._social_debug(
+                "async_agent_drain_limit",
+                msg,
+                pending=len(pending),
+            )
+            return ""
+        self._social_debug(
+            "async_agent_wait_start",
+            msg,
+            pending=len(pending),
+            timeout_seconds=SOCIAL_ASYNC_AGENT_WAIT_SECONDS,
+        )
+        try:
+            completed = await asyncio.wait_for(
+                wait_for_completed_async_agent_entries(engine.tool_metadata),
+                timeout=SOCIAL_ASYNC_AGENT_WAIT_SECONDS,
+            )
+        except asyncio.TimeoutError:
+            logger.warning(
+                "Social async agent wait timed out channel=%s chat_id=%s sender=%s pending=%s",
+                msg.channel,
+                msg.chat_id,
+                msg.sender_id,
+                len(pending),
+            )
+            self._social_debug(
+                "async_agent_wait_timeout",
+                msg,
+                pending=len(pending),
+                timeout_seconds=SOCIAL_ASYNC_AGENT_WAIT_SECONDS,
+            )
+            return ""
+        notification_payload = format_completed_task_notifications(completed)
+        self._social_debug(
+            "async_agent_wait_complete",
+            msg,
+            completed=len(completed),
+            notification=self._truncate_log_text(notification_payload, limit=3000),
+        )
+        return notification_payload
 
     async def _publish_reply(
         self,
@@ -423,6 +689,244 @@ class WebConfigSmartChannelBridge:
     async def _publish_notice(self, msg: InboundMessage, text: str) -> None:
         self._append_assistant_session_message(msg, text, None)
         await self._publish_reply(msg, text)
+
+    def _normalize_inbound_media_paths(self, msg: InboundMessage, media: list[str]) -> list[str]:
+        normalized: list[str] = []
+        root = resolve_social_bot_dir(msg.channel).resolve()
+        for raw_path in media:
+            path = Path(self._expand_path_alias(raw_path)).expanduser().resolve()
+            if self._is_short_social_path(path, root):
+                normalized.append(str(path))
+                continue
+            try:
+                target = allocate_social_file(msg.channel, path.name, default_ext=path.suffix or ".dat").resolve()
+                if path != target:
+                    shutil.copy2(path, target)
+                normalized.append(str(target))
+            except Exception:
+                logger.exception("Failed to normalize inbound social media path: %s", path)
+                normalized.append(str(path))
+        return normalized
+
+    def _normalize_social_media_paths(
+        self,
+        msg: InboundMessage,
+        media: list[str],
+        media_modes: dict[str, str],
+    ) -> tuple[list[str], dict[str, str]]:
+        normalized: list[str] = []
+        normalized_modes: dict[str, str] = {}
+        root = resolve_social_bot_dir(msg.channel).resolve()
+        for raw_path in media:
+            path = Path(self._expand_path_alias(raw_path)).expanduser().resolve()
+            target = path
+            if not self._is_short_social_path(path, root):
+                try:
+                    target = allocate_social_file(msg.channel, path.name, default_ext=path.suffix or ".dat").resolve()
+                    if path != target:
+                        shutil.copy2(path, target)
+                except Exception:
+                    logger.exception("Failed to normalize social media path: %s", path)
+                    target = path
+            text_target = str(target)
+            normalized.append(text_target)
+            mode = media_modes.get(raw_path) or media_modes.get(str(path))
+            if mode:
+                normalized_modes[text_target] = mode
+        return normalized, normalized_modes
+
+    @staticmethod
+    def _is_short_social_path(path: Path, root: Path) -> bool:
+        try:
+            path.relative_to(root)
+        except ValueError:
+            return False
+        return re.fullmatch(r"\d{1,3}(?:\.[A-Za-z0-9]{1,12})?", path.name) is not None
+
+    def _configure_engine_permissions_for_message(
+        self,
+        engine: QueryEngine,
+        msg: InboundMessage,
+        active_skills: set[str] | None = None,
+    ) -> None:
+        try:
+            from openharness.config.settings import PermissionSettings, load_settings
+            from openharness.permissions.checker import PermissionChecker
+            from openharness.permissions.modes import PermissionMode
+
+            settings = load_settings()
+            mode = settings.permission.mode
+            auto_approve = bool(getattr(settings.social_platforms, "social_auto_approve_tools", False))
+            if auto_approve and mode == PermissionMode.DEFAULT:
+                mode = PermissionMode.FULL_AUTO
+            permission_settings = PermissionSettings(
+                mode=mode,
+                allowed_tools=list(settings.permission.allowed_tools),
+                denied_tools=list(settings.permission.denied_tools),
+                path_rules=list(settings.permission.path_rules),
+                denied_commands=list(settings.permission.denied_commands),
+            )
+            engine.set_permission_checker(PermissionChecker(permission_settings))
+            engine.set_permission_prompt(None if auto_approve else self._make_permission_prompt(engine, msg, active_skills))
+        except Exception:
+            logger.exception("Failed to configure social engine permissions for message")
+
+    def _make_permission_prompt(
+        self,
+        engine: QueryEngine,
+        msg: InboundMessage,
+        active_skills: set[str] | None = None,
+    ):
+        async def ask(tool_name: str, reason: str, tool_input: dict[str, object] | None = None) -> bool:
+            key = self._state_key(msg)
+            state = self._states.setdefault(key, self._new_state())
+            if tool_name == "send_message" and isinstance(tool_input, dict):
+                message = str(tool_input.get("message") or "")
+                if OUTBOUND_MEDIA_RE.search(message):
+                    self._social_debug(
+                        "permission_auto_approved_send_message_media_marker",
+                        msg,
+                        tool=tool_name,
+                        message=self._truncate_log_text(message, limit=1000),
+                    )
+                    return True
+            skill_name = self._permission_skill_from_tool_call(engine, state, tool_name, tool_input, active_skills)
+            if skill_name and self._skill_config_auto_approved(skill_name):
+                self._remember_approved_skill(engine, state, skill_name)
+                self._social_debug(
+                    "permission_auto_approved_by_skill_config",
+                    msg,
+                    tool=tool_name,
+                    skill=skill_name,
+                    active_skills=sorted(active_skills or []),
+                    reason=self._truncate_log_text(reason, limit=1000),
+                )
+                return True
+            if skill_is_approved(skill_name, engine.tool_metadata):
+                self._social_debug(
+                    "permission_auto_approved_by_skill",
+                    msg,
+                    tool=tool_name,
+                    skill=skill_name,
+                    active_skills=sorted(active_skills or []),
+                    reason=self._truncate_log_text(reason, limit=1000),
+                )
+                return True
+            future: asyncio.Future[bool] = asyncio.get_running_loop().create_future()
+            state["pending_permission"] = {
+                "future": future,
+                "tool": tool_name,
+                "skill": skill_name,
+                "reason": reason,
+                "created_at": time.time(),
+            }
+            self._social_debug(
+                "permission_request",
+                msg,
+                tool=tool_name,
+                skill=skill_name,
+                reason=self._truncate_log_text(reason, limit=1000),
+            )
+            target = f"skill `{skill_name}`" if skill_name else f"工具 `{tool_name}`"
+            await self._publish_reply(
+                msg,
+                f"{target} 需要执行会修改文件或调用外部服务的操作。\n"
+                "回复“允许”继续执行，或回复“拒绝”取消。\n\n"
+                f"原因：{reason}",
+            )
+            try:
+                allowed = await asyncio.wait_for(future, timeout=self._permission_response_timeout_seconds())
+                if allowed and skill_name:
+                    self._remember_approved_skill(engine, state, skill_name)
+                if not allowed:
+                    engine.tool_metadata["last_permission_denied"] = (
+                        f"User denied permission for skill {skill_name}"
+                        if skill_name
+                        else f"User denied permission for tool {tool_name}"
+                    )
+                return allowed
+            except asyncio.TimeoutError:
+                if not future.done():
+                    future.cancel()
+                if state.get("pending_permission", {}).get("future") is future:
+                    state["pending_permission"] = None
+                self._social_debug("permission_timeout", msg, tool=tool_name)
+                await self._publish_reply(msg, f"等待授权超时，已取消 {target}。")
+                return False
+
+        return ask
+
+    def _permission_skill_from_tool_call(
+        self,
+        engine: QueryEngine,
+        state: dict[str, Any],
+        tool_name: str,
+        tool_input: dict[str, object] | None,
+        active_skills: set[str] | None,
+    ) -> str | None:
+        skill_name = infer_skill_from_tool_call(tool_name, tool_input, self._cwd, engine.tool_metadata)
+        if skill_name:
+            return skill_name
+        if active_skills:
+            skill_execution_tools = {"bash", "task_create", "task_output", "task_get", "task_list"}
+            if len(active_skills) == 1 and tool_name in skill_execution_tools:
+                return next(iter(active_skills))
+        approved_state = state.get("approved_social_skills")
+        if isinstance(approved_state, list) and len(approved_state) == 1 and tool_name in {"bash", "task_create"}:
+            return str(approved_state[0]).strip() or None
+        return None
+
+    @staticmethod
+    def _remember_approved_skill(engine: QueryEngine, state: dict[str, Any], skill_name: str) -> None:
+        normalized = skill_name.strip()
+        if not normalized:
+            return
+        for target in (engine.tool_metadata, state):
+            current = target.get("approved_social_skills")
+            values = [str(item).strip() for item in current or [] if str(item).strip()] if isinstance(current, list) else []
+            if not any(item.lower() == normalized.lower() for item in values):
+                values.append(normalized)
+            target["approved_social_skills"] = values[-12:]
+
+    def _skill_name_from_tool_call(self, event: ToolExecutionStarted) -> str | None:
+        if event.tool_name != "skill":
+            return None
+        tool_input = event.tool_input if isinstance(event.tool_input, dict) else {}
+        for key in ("name", "skill", "skill_name"):
+            value = str(tool_input.get(key) or "").strip()
+            if value:
+                return value
+        return None
+
+    def _active_skill_auto_approved(self, active_skills: set[str]) -> bool:
+        try:
+            from openharness.config.settings import load_settings
+
+            settings = load_settings()
+            approved = {
+                str(name).strip()
+                for name in getattr(settings.skill_management, "auto_approve_skills", []) or []
+                if str(name).strip()
+            }
+            return bool(active_skills.intersection(approved))
+        except Exception:
+            logger.exception("Failed to check skill auto-approval setting")
+            return False
+
+    @staticmethod
+    def _skill_config_auto_approved(skill_name: str) -> bool:
+        try:
+            from openharness.config.settings import load_settings
+
+            settings = load_settings()
+            normalized = skill_name.strip().lower()
+            return any(
+                str(name).strip().lower() == normalized
+                for name in getattr(settings.skill_management, "auto_approve_skills", []) or []
+            )
+        except Exception:
+            logger.exception("Failed to check skill auto-approval setting")
+            return False
 
     async def _run_diagnostic_subagent(
         self,
@@ -503,6 +1007,15 @@ class WebConfigSmartChannelBridge:
                             "output": self._truncate_log_text(event.output, limit=1200),
                             "metadata": event.metadata or {},
                         })
+                elif isinstance(event, ErrorEvent):
+                    message = event.message.strip() or "Diagnostic agent returned an error without details."
+                    self._social_debug(
+                        "diagnostic_engine_error",
+                        msg,
+                        message=self._truncate_log_text(message, limit=3000),
+                        recoverable=event.recoverable,
+                    )
+                    reply_parts.append(f"诊断执行出错：{message}")
         except asyncio.TimeoutError:
             self._social_debug(
                 "diagnostic_subagent_timeout",
@@ -617,6 +1130,17 @@ class WebConfigSmartChannelBridge:
             logger.warning("Invalid OPENHARNESS_SOCIAL_DIAGNOSTIC_AGENT_TIMEOUT_SECONDS=%r", raw)
             return SOCIAL_DIAGNOSTIC_AGENT_TIMEOUT_SECONDS
 
+    @staticmethod
+    def _permission_response_timeout_seconds() -> float:
+        raw = os.environ.get("OPENHARNESS_SOCIAL_PERMISSION_TIMEOUT_SECONDS", "").strip()
+        if not raw:
+            return 300.0
+        try:
+            return max(30.0, float(raw))
+        except ValueError:
+            logger.warning("Invalid OPENHARNESS_SOCIAL_PERMISSION_TIMEOUT_SECONDS=%r", raw)
+            return 300.0
+
     def _diagnose_failed_tools(self, tool_errors: list[dict[str, Any]]) -> str:
         last = tool_errors[-1] if tool_errors else {}
         tool = str(last.get("tool") or "tool")
@@ -678,13 +1202,13 @@ class WebConfigSmartChannelBridge:
             {"role": "assistant", "content": content, "timestamp": __import__("time").time(), "agent_name": agent_name}
         )
 
-    def _remember_message(self, msg: InboundMessage) -> None:
+    def _remember_message(self, msg: InboundMessage, *, media_paths: list[str] | None = None) -> None:
         message_id = self._message_id(msg)
         if not message_id:
             return
         self._messages_by_id[f"{msg.channel}:{message_id}"] = {
             "content": msg.content,
-            "media": self._extract_media_paths(msg),
+            "media": list(media_paths if media_paths is not None else self._extract_media_paths(msg)),
             "metadata": dict(msg.metadata or {}),
         }
         if len(self._messages_by_id) > 1000:
@@ -752,9 +1276,29 @@ class WebConfigSmartChannelBridge:
         return list(dict.fromkeys(p for p in paths if p))
 
     @staticmethod
-    def _extract_outbound_media(text: str, *, base_dir: Path | None = None) -> tuple[str, list[str], dict[str, str]]:
+    def _resolve_media_paths_from_text(text: str) -> set[str]:
+        paths: set[str] = set()
+        for pattern in (ATTACHMENT_RE, MEDIA_MARKER_RE):
+            for match in pattern.findall(text or ""):
+                raw_path = match.strip()
+                if " - " in raw_path:
+                    continue
+                try:
+                    paths.add(str(Path(WebConfigSmartChannelBridge._expand_path_alias(raw_path)).expanduser().resolve()))
+                except Exception:
+                    continue
+        return paths
+
+    @staticmethod
+    def _extract_outbound_media(
+        text: str,
+        *,
+        base_dir: Path | None = None,
+        input_media: set[str] | None = None,
+    ) -> tuple[str, list[str], dict[str, str]]:
         media: list[str] = []
         modes: dict[str, str] = {}
+        input_media = input_media or set()
 
         def replace(match: re.Match[str]) -> str:
             marker = match.group(1).lower()
@@ -762,6 +1306,12 @@ class WebConfigSmartChannelBridge:
             if " - " in raw_path:
                 return match.group(0)
             path = WebConfigSmartChannelBridge._resolve_outbound_media_path(raw_path, base_dir)
+            try:
+                resolved_path = str(Path(WebConfigSmartChannelBridge._expand_path_alias(path)).expanduser().resolve())
+            except Exception:
+                resolved_path = path
+            if resolved_path in input_media:
+                return raw_path
             media.append(path)
             if marker == "voice":
                 modes[path] = "voice"
@@ -784,7 +1334,7 @@ class WebConfigSmartChannelBridge:
 
     @staticmethod
     def _resolve_outbound_media_path(path: str, base_dir: Path | None = None) -> str:
-        candidate = Path(path).expanduser()
+        candidate = Path(WebConfigSmartChannelBridge._expand_path_alias(path)).expanduser()
         if candidate.is_absolute():
             if candidate.exists():
                 return str(candidate)
@@ -801,6 +1351,67 @@ class WebConfigSmartChannelBridge:
         if base_dir is not None:
             return str((base_dir / candidate).resolve())
         return str(candidate)
+
+    @staticmethod
+    def _path_aliases() -> dict[str, str]:
+        try:
+            from openharness.config.settings import load_settings
+            from openharness.config.paths import get_data_dir
+
+            settings = load_settings()
+            aliases = dict(getattr(settings.skill_management, "path_aliases", {}) or {})
+        except Exception:
+            aliases = {}
+        aliases.setdefault("USKILL", "~/.openharness/skills")
+        try:
+            from openharness.config.paths import get_data_dir
+
+            aliases.setdefault("UDATA", str(get_data_dir()))
+        except Exception:
+            pass
+        aliases.setdefault("UPROJ", str(Path.cwd()))
+        aliases.setdefault("UWEB", str((Path.cwd() / ".openharness" / "media" / "web").resolve()))
+        aliases.setdefault(
+            "SOCIAL",
+            os.environ.get("OPENHARNESS_SOCIAL_DIR")
+            or os.environ.get("OPENHARNESS_SOCIAL_ROOT")
+            or "~/.openharness/social",
+        )
+        normalized: dict[str, str] = {}
+        for raw_name, raw_path in aliases.items():
+            name = re.sub(r"[^A-Za-z0-9_]", "", str(raw_name).strip().lstrip("$"))
+            value = str(raw_path).strip()
+            if name and value:
+                normalized[name] = str(Path(value).expanduser().resolve())
+        return normalized
+
+    @staticmethod
+    def _expand_path_alias(path: str) -> str:
+        text = path.strip()
+        for name, prefix in WebConfigSmartChannelBridge._path_aliases().items():
+            token = f"${name}"
+            if text == token:
+                return prefix
+            if text.startswith(token + "/"):
+                return prefix + text[len(token):]
+        return text
+
+    @staticmethod
+    def _compress_path_alias(path: str | Path) -> str:
+        try:
+            resolved = str(Path(path).expanduser().resolve())
+        except OSError:
+            resolved = str(path)
+        for name, prefix in sorted(
+            WebConfigSmartChannelBridge._path_aliases().items(),
+            key=lambda item: len(item[1]),
+            reverse=True,
+        ):
+            if resolved == prefix:
+                return f"${name}"
+            if resolved.startswith(prefix + os.sep):
+                return f"${name}{resolved[len(prefix):]}"
+        return str(path)
 
     @staticmethod
     def _find_existing_by_name(filename: str, base_dir: Path | None = None) -> Path | None:
@@ -830,12 +1441,17 @@ class WebConfigSmartChannelBridge:
     ) -> tuple[list[str], dict[str, str], list[str]]:
         existing: list[str] = []
         missing: list[str] = []
+        existing_modes: dict[str, str] = {}
         for path in media:
-            if Path(path).expanduser().is_file():
-                existing.append(path)
+            resolved = WebConfigSmartChannelBridge._expand_path_alias(path)
+            if Path(resolved).expanduser().is_file():
+                existing.append(resolved)
+                mode = modes.get(path) or modes.get(resolved)
+                if mode:
+                    existing_modes[resolved] = mode
             else:
                 missing.append(path)
-        return existing, {path: modes[path] for path in existing if path in modes}, missing
+        return existing, existing_modes, missing
 
     @staticmethod
     def _is_unmentioned_group_message(msg: InboundMessage) -> bool:
@@ -849,10 +1465,60 @@ class WebConfigSmartChannelBridge:
 
     @staticmethod
     def _media_item(msg: InboundMessage, paths: list[str]) -> dict[str, Any]:
-        return {"content": msg.content, "media": paths, "metadata": dict(msg.metadata or {})}
+        return {
+            "content": msg.content,
+            "media": paths,
+            "metadata": dict(msg.metadata or {}),
+            "timestamp": time.time(),
+        }
 
     def _merge_pending_media(self, existing: list[dict[str, Any]], msg: InboundMessage, paths: list[str]) -> list[dict[str, Any]]:
         return [*existing, self._media_item(msg, paths)]
+
+    def _merge_recent_media(self, existing: list[dict[str, Any]], msg: InboundMessage, paths: list[str]) -> list[dict[str, Any]]:
+        merged = [*self._recent_media_items(existing), self._media_item(msg, paths)]
+        return merged[-6:]
+
+    @staticmethod
+    def _is_continue_request(text: str) -> bool:
+        normalized = re.sub(r"\s+", "", text or "").lower()
+        return normalized in {
+            "继续",
+            "继续执行",
+            "继续生成",
+            "接着来",
+            "接着执行",
+            "继续吧",
+            "goon",
+            "continue",
+        }
+
+    @staticmethod
+    def _permission_response(text: str) -> bool | None:
+        normalized = re.sub(r"\s+", "", text or "").lower()
+        if normalized in {"允许", "同意", "确认", "可以", "批准", "是", "yes", "y", "ok", "approve", "allow"}:
+            return True
+        if normalized in {"拒绝", "不同意", "取消", "不允许", "否", "no", "n", "deny", "reject", "cancel"}:
+            return False
+        return None
+
+    @staticmethod
+    def _recent_media_items(items: Any) -> list[dict[str, Any]]:
+        now = time.time()
+        recent: list[dict[str, Any]] = []
+        for item in items if isinstance(items, list) else []:
+            if not isinstance(item, dict):
+                continue
+            timestamp = float(item.get("timestamp") or 0)
+            if timestamp and now - timestamp > RECENT_MEDIA_TTL_SECONDS:
+                continue
+            media = [str(p) for p in item.get("media", []) if isinstance(p, str) and p.strip()]
+            media = [p for p in media if Path(p).expanduser().exists()]
+            if media:
+                copy = dict(item)
+                copy["media"] = media
+                recent.append(copy)
+        return recent
 
     @staticmethod
     def _combine_instruction(first: str, second: str) -> str:
@@ -863,15 +1529,51 @@ class WebConfigSmartChannelBridge:
         return first or second
 
     @staticmethod
-    def _looks_like_media_instruction(text: str) -> bool:
-        lowered = text.lower()
-        return any(word in lowered for word in MEDIA_WORDS) and any(word in lowered for word in ACTION_WORDS)
+    def _parse_file_expectation_marker(text: str) -> tuple[dict[str, Any], str]:
+        """解析期待标记，返回 (expecting_file, cleaned_text)。"""
+        match = FILE_EXPECTATION_RE.search(text)
+        if not match:
+            return {"active": False, "description": ""}, text
+        full_match = match.group(0)
+        description = match.group(1) or match.group(2) or ""
+        if "无需" in full_match.lower():
+            expecting = {"active": False, "description": ""}
+        else:
+            expecting = {"active": True, "description": description.strip()}
+        cleaned = FILE_EXPECTATION_RE.sub("", text).strip()
+        return expecting, cleaned
+
+    def _scan_new_files_in_output_dir(self, output_dir: Path, previous_snapshot: set[str]) -> list[str]:
+        """扫描 output_dir 中新增的文件。"""
+        try:
+            current_files = {str(p) for p in output_dir.rglob("*") if p.is_file()}
+        except Exception:
+            return []
+        new_files = current_files - previous_snapshot
+        return sorted(new_files)
+
+    def _build_prompt_with_timeline(self, state: dict[str, Any], *, instruction: str | None = None) -> str:
+        """使用文件时间线构建 prompt。"""
+        parts = []
+        if instruction:
+            parts.append(instruction.strip())
+        files = state.get("conversation_files", [])
+        if files:
+            parts.append("\n--- 对话文件记录 ---")
+            for item in files:
+                source_label = "用户发送" if item["source"] == "user" else "助手生成"
+                lines = [f"[消息 {item['msg_index']}] {source_label}："]
+                for path in item["media"]:
+                    lines.append(f"   - {self._compress_path_alias(path)}")
+                parts.append("\n".join(lines))
+        return "\n".join(p for p in parts if p).strip()
 
     def _build_prompt(
         self,
         instruction: str,
         *,
         media_items: list[dict[str, Any]] | None = None,
+        recent_media_items: list[dict[str, Any]] | None = None,
         quoted: dict[str, Any] | None = None,
     ) -> str:
         parts = [instruction.strip()]
@@ -885,18 +1587,21 @@ class WebConfigSmartChannelBridge:
             content = self._strip_attachment_markers(str(item.get("content") or "")).strip()
             media = [str(p) for p in item.get("media", []) if isinstance(p, str) and p.strip()]
             lines = [f"{idx}. " + (content if content else "无附加文字")]
-            lines.extend(f"   - [attachment: {path}]" for path in media)
+            lines.extend(f"   - [attachment: {self._compress_path_alias(path)}]" for path in media)
             parts.append("\n".join(lines))
+        recent_items = list(recent_media_items or [])
+        if recent_items:
+            parts.append("\n最近收到的文件/多媒体内容如下；如果与当前请求相关，可以使用它们，否则忽略：")
+            for idx, item in enumerate(recent_items, start=1):
+                content = self._strip_attachment_markers(str(item.get("content") or "")).strip()
+                media = [str(p) for p in item.get("media", []) if isinstance(p, str) and p.strip()]
+                lines = [f"{idx}. " + (content if content else "无附加文字")]
+                lines.extend(f"   - [attachment: {self._compress_path_alias(path)}]" for path in media)
+                parts.append("\n".join(lines))
         return "\n".join(p for p in parts if p).strip()
 
     def _ensure_social_output_dir(self, msg: InboundMessage) -> Path:
-        output_dir = (
-            Path(self._cwd)
-            / ".openharness"
-            / "social_outputs"
-            / self._safe_path_part(msg.channel)
-            / self._safe_path_part(msg.session_key_override or msg.sender_id or msg.chat_id)
-        )
+        output_dir = resolve_social_bot_dir(msg.channel)
         output_dir.mkdir(parents=True, exist_ok=True)
         return output_dir.resolve()
 
@@ -905,21 +1610,37 @@ class WebConfigSmartChannelBridge:
         try:
             from openharness.skills import load_skill_registry
 
+            user_skill_root = Path(os.path.expanduser("~/.openharness/skills")).resolve()
             for skill in load_skill_registry(self._cwd).list_skills():
+                if not skill.base_dir:
+                    continue
+                try:
+                    Path(skill.base_dir).expanduser().resolve().relative_to(user_skill_root)
+                except ValueError:
+                    continue
                 command_name = skill.command_name or skill.name
-                base = f" at {skill.base_dir}" if skill.base_dir else ""
-                skill_lines.append(f"- {command_name}{base}: {skill.description}")
+                description = " ".join((skill.description or "").split())
+                if len(description) > 120:
+                    description = description[:117].rstrip() + "..."
+                skill_lines.append(f"- {command_name} at {self._compress_path_alias(skill.base_dir)}: {description}")
         except Exception:
             logger.exception("Failed to load skills for social prompt")
 
         skill_text = ""
         if skill_lines:
-            skill_text = "\n\n可用 skills：\n" + "\n".join(skill_lines[:20])
+            skill_text = "\n\n可用 skills：\n" + "\n".join(skill_lines[:8])
+        alias_lines = [
+            f"- ${name} = {prefix}"
+            for name, prefix in sorted(self._path_aliases().items())
+            if name in {"USKILL", "UDATA", "UPROJ", "UWEB", "SOCIAL"}
+        ]
+        #别名LLM不需要知道，因为给LLM的路径本身就已经用别名替换了，LLM只要照样输出就可以
+        alias_text = "" #"\n\n可用路径别名：\n" + "\n".join(alias_lines) if alias_lines else ""
 
         return (
-            f"{content.rstrip()}{skill_text}{SOCIAL_OUTPUT_INSTRUCTIONS}\n"
-            f"本次消息的社交输出目录是：{output_dir}\n"
-            "如果调用工具或 MCP 生成音频、图片、压缩包、文档等文件，请把 output/output_path/path/目录参数设置到这个目录下。"
+            f"{content.rstrip()}{skill_text}{alias_text}{SOCIAL_OUTPUT_INSTRUCTIONS}{FILE_EXPECTATION_INSTRUCTIONS}\n"
+            f"本次消息的社交输出目录是：{self._compress_path_alias(output_dir)}\n"
+            "工具参数里的 output/output_path/path 请使用此目录；"
         )
 
     def _log_tool_started(self, msg: InboundMessage, event: ToolExecutionStarted, output_dir: Path) -> None:
@@ -1046,12 +1767,20 @@ class WebConfigChannelRuntime:
 
             def resolve_agent_id(channel_name: str) -> str | None:
                 assignments = self._raw_settings.get("bot_agent_assignments", {})
-                if not isinstance(assignments, dict):
-                    return None
-                agent_id = assignments.get(channel_name)
+                agent_id = assignments.get(channel_name) if isinstance(assignments, dict) else None
                 if agent_id is None:
-                    return None
-                return str(agent_id).strip() or None
+                    try:
+                        from openharness.config.paths import get_config_dir
+
+                        agents_path = get_config_dir() / "agents.json"
+                        if agents_path.exists():
+                            agents_data = json.loads(agents_path.read_text(encoding="utf-8"))
+                            agent_id = agents_data.get("active_agent_id")
+                    except Exception:
+                        logger.exception("ChannelBridge: failed to resolve active web agent for %s", channel_name)
+                resolved = str(agent_id or "").strip() or None
+                logger.info("ChannelBridge: resolved agent for channel %s = %s", channel_name, resolved)
+                return resolved
 
             def resolve_agent_name(agent_id: str) -> str:
                 from openharness.config.paths import get_config_dir
@@ -1154,10 +1883,34 @@ class WebConfigChannelRuntime:
                     )
                     max_turns = settings.max_turns
 
+                context_window_tokens = settings.context_window_tokens or settings.memory.context_window_tokens
+                auto_compact_threshold_tokens = (
+                    settings.auto_compact_threshold_tokens
+                    or settings.memory.auto_compact_threshold_tokens
+                )
+                max_tokens = settings.max_tokens
+                if context_window_tokens is None and self._looks_like_local_llm_endpoint(getattr(settings, "base_url", "")):
+                    context_window_tokens = 8192
+                    auto_compact_threshold_tokens = auto_compact_threshold_tokens or 5600
+                    max_tokens = min(max_tokens, 2048)
+                    logger.info(
+                        "ChannelBridge: inferred local LLM context for social agent %s: context_window=%s threshold=%s max_tokens=%s",
+                        agent_id,
+                        context_window_tokens,
+                        auto_compact_threshold_tokens,
+                        max_tokens,
+                    )
+
                 api_client = _resolve_api_client_from_settings(settings)
 
                 tool_registry = ToolRegistry()
                 for tool in self._bundle.tool_registry.list_tools():
+                    if tool.name == "send_message":
+                        logger.info("ChannelBridge: skipping send_message tool for social agent %s", agent_id)
+                        continue
+                    if tool.name == "image_to_text" and not self._vision_tool_configured(settings):
+                        logger.info("ChannelBridge: skipping image_to_text for social agent %s because vision is not configured", agent_id)
+                        continue
                     if yaml_agent_def is None or yaml_agent_def.tools is None or "*" in yaml_agent_def.tools or tool.name in yaml_agent_def.tools:
                         if yaml_agent_def is None or tool.name not in (yaml_agent_def.disallowed_tools or []):
                             tool_registry.register(tool)
@@ -1167,9 +1920,9 @@ class WebConfigChannelRuntime:
                     perm_mode = PermissionMode(permission_mode)
                 except ValueError:
                     perm_mode = settings.permission.mode
-                if perm_mode == PermissionMode.DEFAULT:
+                if perm_mode == PermissionMode.DEFAULT and bool(getattr(settings.social_platforms, "social_auto_approve_tools", False)):
                     logger.info(
-                        "ChannelBridge: social channel agent %s uses full_auto permissions because chat channels cannot answer interactive confirmations",
+                        "ChannelBridge: social channel agent %s uses full_auto permissions because social_auto_approve_tools is enabled",
                         agent_id,
                     )
                     perm_mode = PermissionMode.FULL_AUTO
@@ -1189,9 +1942,9 @@ class WebConfigChannelRuntime:
                     cwd=self._cwd,
                     model=model,
                     system_prompt=system_prompt,
-                    max_tokens=settings.max_tokens,
-                    context_window_tokens=settings.context_window_tokens or settings.memory.context_window_tokens,
-                    auto_compact_threshold_tokens=settings.auto_compact_threshold_tokens or settings.memory.auto_compact_threshold_tokens,
+                    max_tokens=max_tokens,
+                    context_window_tokens=context_window_tokens,
+                    auto_compact_threshold_tokens=auto_compact_threshold_tokens,
                     max_turns=max_turns,
                     settings=settings,
                     tool_metadata={
@@ -1260,6 +2013,32 @@ class WebConfigChannelRuntime:
         else:
             assignments.pop(channel_name, None)
         self._raw_settings["bot_agent_assignments"] = assignments
+
+    @staticmethod
+    def _looks_like_local_llm_endpoint(base_url: str | None) -> bool:
+        value = str(base_url or "").lower()
+        return (
+            "127.0.0.1" in value
+            or "localhost" in value
+            or "0.0.0.0" in value
+            or value.startswith("http://192.168.")
+            or value.startswith("http://10.")
+            or value.startswith("http://172.16.")
+            or value.startswith("http://172.17.")
+            or value.startswith("http://172.18.")
+            or value.startswith("http://172.19.")
+            or value.startswith("http://172.2")
+            or value.startswith("http://172.30.")
+            or value.startswith("http://172.31.")
+        )
+
+    @staticmethod
+    def _vision_tool_configured(settings: Any) -> bool:
+        vision = getattr(settings, "vision", None)
+        return bool(
+            str(getattr(vision, "model", "") or "").strip()
+            and str(getattr(vision, "api_key", "") or "").strip()
+        )
 
     def _patch_channels_for_web_media_capture(self) -> None:
         """Let web_config capture unmentioned Feishu media while bridge filters text."""

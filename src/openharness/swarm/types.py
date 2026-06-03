@@ -294,6 +294,9 @@ class TeammateSpawnConfig:
     permissions: list[str] = field(default_factory=list)
     """Tool permissions to grant this teammate."""
 
+    permission_mode: str | None = None
+    """Optional permission-mode override for the teammate process."""
+
     plan_mode_required: bool = False
     """Whether this teammate must enter plan mode before implementing."""
 

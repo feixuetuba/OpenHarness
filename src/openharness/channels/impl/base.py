@@ -8,25 +8,50 @@ from typing import Any
 
 from openharness.channels.bus.events import InboundMessage, OutboundMessage
 from openharness.channels.bus.queue import MessageBus
-from openharness.config.paths import get_data_dir
-
 logger = logging.getLogger(__name__)
+
+
+def resolve_social_root() -> Path:
+    """Return the root directory for social-channel runtime files."""
+    custom_root = os.environ.get("OPENHARNESS_SOCIAL_DIR") or os.environ.get("OPENHARNESS_SOCIAL_ROOT")
+    root = Path(custom_root).expanduser().resolve() if custom_root else (Path.home() / ".openharness" / "social").resolve()
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def safe_social_id(value: str) -> str:
+    """Return a compact filesystem-safe social bot/channel identifier."""
+    cleaned = "".join(ch if ch.isalnum() or ch in {"-", "_"} else "_" for ch in str(value).strip())
+    return (cleaned.strip("._") or "bot")[:64]
+
+
+def resolve_social_bot_dir(bot_id: str) -> Path:
+    """Return the unified directory for one social bot/channel."""
+    bot_dir = resolve_social_root() / safe_social_id(bot_id)
+    bot_dir.mkdir(parents=True, exist_ok=True)
+    return bot_dir
+
+
+def allocate_social_file(bot_id: str, original_name: str | None = None, *, default_ext: str = ".dat") -> Path:
+    """Allocate a short numeric filename under ``$SOCIAL/<bot-id>/``."""
+    bot_dir = resolve_social_bot_dir(bot_id)
+    suffix = Path(str(original_name or "")).suffix.lower()
+    if not suffix:
+        suffix = default_ext if default_ext.startswith(".") else f".{default_ext}"
+    for index in range(1, 1000):
+        candidate = bot_dir / f"{index:03d}{suffix}"
+        if not candidate.exists():
+            return candidate
+    raise FileExistsError(f"No available social filename under {bot_dir}")
 
 
 def resolve_channel_media_dir(channel_name: str) -> Path:
     """Return the local download directory for inbound channel media."""
     custom_root = os.environ.get("OPENHARNESS_CHANNEL_MEDIA_DIR")
-    if custom_root:
-        root = Path(custom_root).expanduser().resolve()
-    else:
-        ohmo_workspace = os.environ.get("OHMO_WORKSPACE")
-        if ohmo_workspace:
-            from ohmo.workspace import get_attachments_dir
-
-            root = get_attachments_dir(ohmo_workspace)
-        else:
-            root = get_data_dir() / "media"
-    media_dir = root / channel_name
+    if not custom_root:
+        return resolve_social_bot_dir(channel_name)
+    root = Path(custom_root).expanduser().resolve()
+    media_dir = root / safe_social_id(channel_name)
     media_dir.mkdir(parents=True, exist_ok=True)
     return media_dir
 

@@ -8,6 +8,7 @@ from pathlib import Path
 from pydantic import BaseModel, Field
 
 from openharness.tools.base import BaseTool, ToolExecutionContext, ToolResult
+from openharness.tools.path_aliases import resolve_path
 
 
 class FileWriteToolInput(BaseModel):
@@ -30,7 +31,7 @@ class FileWriteTool(BaseTool):
         arguments: FileWriteToolInput,
         context: ToolExecutionContext,
     ) -> ToolResult:
-        path = _resolve_path(context.cwd, arguments.path)
+        path = resolve_path(context.cwd, arguments.path)
 
         from openharness.sandbox.session import is_docker_sandbox_active
 
@@ -58,14 +59,6 @@ class FileWriteTool(BaseTool):
             path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(arguments.content, encoding="utf-8")
         return ToolResult(output=f"Wrote {path}")
-
-
-def _resolve_path(base: Path, candidate: str) -> Path:
-    path = Path(candidate).expanduser()
-    if not path.is_absolute():
-        path = base / path
-    return path.resolve()
-
 
 def _compute_diff(filename: str, original: str, updated: str) -> tuple[str, int, int]:
     diff_lines = list(

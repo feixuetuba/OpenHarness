@@ -8,6 +8,7 @@ from pathlib import Path
 from pydantic import BaseModel, Field
 
 from openharness.tools.base import BaseTool, ToolExecutionContext, ToolResult
+from openharness.tools.path_aliases import resolve_path
 
 
 class FileEditToolInput(BaseModel):
@@ -31,7 +32,7 @@ class FileEditTool(BaseTool):
         arguments: FileEditToolInput,
         context: ToolExecutionContext,
     ) -> ToolResult:
-        path = _resolve_path(context.cwd, arguments.path)
+        path = resolve_path(context.cwd, arguments.path)
 
         from openharness.sandbox.session import is_docker_sandbox_active
 
@@ -66,14 +67,6 @@ class FileEditTool(BaseTool):
 
         path.write_text(updated, encoding="utf-8")
         return ToolResult(output=f"Updated {path}")
-
-
-def _resolve_path(base: Path, candidate: str) -> Path:
-    path = Path(candidate).expanduser()
-    if not path.is_absolute():
-        path = base / path
-    return path.resolve()
-
 
 def _compute_diff(filename: str, original: str, updated: str) -> tuple[str, int, int]:
     diff_lines = list(

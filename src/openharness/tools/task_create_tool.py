@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
-import os
-
 from pydantic import BaseModel, Field
 
+from openharness.swarm.registry import get_backend_registry
+from openharness.swarm.types import TeammateSpawnConfig
 from openharness.tasks.manager import get_task_manager
 from openharness.tools.base import BaseTool, ToolExecutionContext, ToolResult
+from openharness.tools.bash_tool import _path_aliases
+from openharness.tools.skill_permission import infer_skill_from_text, skill_is_approved
 
 
 class TaskCreateToolInput(BaseModel):
@@ -36,21 +38,53 @@ class TaskCreateTool(BaseTool):
                 command=arguments.command,
                 description=arguments.description,
                 cwd=context.cwd,
+                env=_path_aliases(context.cwd),
             )
         elif arguments.type == "local_agent":
             if not arguments.prompt:
                 return ToolResult(output="prompt is required for local_agent tasks", is_error=True)
-            try:
-                task = await manager.create_agent_task(
+            executor = get_backend_registry().get_executor("subprocess")
+            target_skill = infer_skill_from_text(
+                f"{arguments.description}\n{arguments.prompt}",
+                context.cwd,
+                context.metadata,
+            )
+            permission_mode = "bypassPermissions" if skill_is_approved(target_skill, context.metadata) else None
+            result = await executor.spawn(
+                TeammateSpawnConfig(
+                    name="task",
+                    team="default",
                     prompt=arguments.prompt,
-                    description=arguments.description,
-                    cwd=context.cwd,
+                    cwd=str(context.cwd),
+                    parent_session_id="main",
                     model=arguments.model,
-                    api_key=os.environ.get("ANTHROPIC_API_KEY"),
+                    permission_mode=permission_mode,
+                    task_type="local_agent",
                 )
-            except ValueError as exc:
-                return ToolResult(output=str(exc), is_error=True)
+            )
+            if not result.success:
+                return ToolResult(output=result.error or "Failed to create local_agent task", is_error=True)
+            return ToolResult(
+                output=(
+                    f"Spawned agent {result.agent_id} "
+                    f"(task_id={result.task_id}, backend={result.backend_type})"
+                ),
+                metadata={
+                    "agent_id": result.agent_id,
+                    "task_id": result.task_id,
+                    "task_type": "local_agent",
+                    "backend_type": result.backend_type,
+                    "description": arguments.description,
+                },
+            )
         else:
             return ToolResult(output=f"unsupported task type: {arguments.type}", is_error=True)
 
-        return ToolResult(output=f"Created task {task.id} ({task.type})")
+        return ToolResult(
+            output=f"Created task {task.id} ({task.type})",
+            metadata={
+                "task_id": task.id,
+                "task_type": task.type,
+                "description": arguments.description,
+            },
+        )

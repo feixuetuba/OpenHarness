@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import logging
 import shlex
+from pathlib import Path
 from pydantic import BaseModel, Field
 
 from openharness.skills import load_skill_registry
 from openharness.tools.base import BaseTool, ToolExecutionContext, ToolResult
+from openharness.tools.path_aliases import compress_path_alias
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +41,17 @@ class SkillTool(BaseTool):
         skill = registry.get(arguments.name) or registry.get(arguments.name.lower()) or registry.get(arguments.name.title())
         if skill is None:
             logger.warning("[SkillTool] Skill not found: %s", arguments.name)
-            return ToolResult(output=f"Skill not found: {arguments.name}", is_error=True)
+            available = ", ".join(
+                sorted({skill.command_name or skill.name for skill in registry.list_skills()})[:30]
+            )
+            hint = f" Available skills: {available}" if available else ""
+            return ToolResult(
+                output=(
+                    f"Skill not found: {arguments.name}. Choose one of the available skills and call "
+                    f"the skill tool again with its exact name.{hint}"
+                ),
+                is_error=True,
+            )
         if skill.disable_model_invocation:
             command_name = skill.command_name or skill.name
             logger.warning("[SkillTool] Skill %s has disable_model_invocation", command_name)
@@ -50,10 +62,13 @@ class SkillTool(BaseTool):
         logger.info("[SkillTool] Found skill: name=%s base_dir=%s path=%s", skill.name, skill.base_dir, skill.path)
         content = skill.content
         if skill.base_dir:
+            compact_dir = compress_path_alias(skill.base_dir, context.cwd)
             content = (
-                f"Skill directory: {skill.base_dir}\n"
-                f"Run scripts from this directory, for example: cd {shlex.quote(skill.base_dir)} && <command>\n\n"
+                f"Skill directory: {compact_dir}\n"
+                f"Run scripts from this directory, for example: cd {shlex.quote(compact_dir)} && <command>\n"
+                "Path aliases such as $USKILL are available to shell tools as environment variables.\n\n"
                 f"{content}"
             )
         logger.info("[SkillTool] Returning skill content (first 500 chars): %s", content[:500])
         return ToolResult(output=content)
+

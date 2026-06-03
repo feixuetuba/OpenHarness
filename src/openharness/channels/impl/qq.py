@@ -16,7 +16,7 @@ import httpx
 
 from openharness.channels.bus.events import OutboundMessage
 from openharness.channels.bus.queue import MessageBus
-from openharness.channels.impl.base import BaseChannel, resolve_channel_media_dir
+from openharness.channels.impl.base import BaseChannel, allocate_social_file, resolve_channel_media_dir
 from openharness.config.paths import get_data_dir
 from openharness.config.schema import QQConfig
 from openharness.utils.helpers import safe_filename
@@ -159,14 +159,48 @@ class QQChannel(BaseChannel):
             logger.error("Error sending QQ message: %s", e)
 
     async def _send_text(self, openid: str, content: str, msg_id: str | None = None) -> None:
-        self._msg_seq += 1
-        await self._client.api.post_c2c_message(
-            openid=openid,
-            msg_type=0,
-            content=content,
-            msg_id=msg_id,
-            msg_seq=self._msg_seq,
-        )
+        last_exc: Exception | None = None
+        for attempt in range(1, 4):
+            self._msg_seq += 1
+            try:
+                self._debug_send_event(
+                    "text_send_start",
+                    openid=openid,
+                    attempt=attempt,
+                    msg_seq=self._msg_seq,
+                    content_length=len(content),
+                )
+                await self._client.api.post_c2c_message(
+                    openid=openid,
+                    msg_type=0,
+                    content=content,
+                    msg_id=msg_id,
+                    msg_seq=self._msg_seq,
+                )
+                self._debug_send_event(
+                    "text_send_done",
+                    openid=openid,
+                    attempt=attempt,
+                    msg_seq=self._msg_seq,
+                    content_length=len(content),
+                )
+                return
+            except Exception as exc:
+                last_exc = exc
+                detail = str(exc) or exc.__class__.__name__
+                logger.warning("QQ text send failed attempt=%s openid=%s error=%s", attempt, openid, detail)
+                self._debug_send_event(
+                    "text_send_failed",
+                    openid=openid,
+                    attempt=attempt,
+                    msg_seq=self._msg_seq,
+                    content_length=len(content),
+                    error=detail,
+                )
+                if attempt < 3:
+                    await asyncio.sleep(1.5 * attempt)
+        if last_exc is not None:
+            raise last_exc
 
     async def _send_media(self, openid: str, media_path: str, msg: OutboundMessage) -> tuple[bool, str]:
         api = getattr(self._client, "api", None)
@@ -213,32 +247,14 @@ class QQChannel(BaseChannel):
                 is_group=is_group,
                 use_base64=use_base64,
             )
-            
-            if use_base64:
-                file_data = base64.b64encode(path.read_bytes()).decode('ascii')
-                media = await self._upload_base64_file(api, openid, file_type, file_data, path.name)
-            else:
-                url = self._public_media_url(path)
-                if not url:
-                    reason = "QQ 群聊文件接口需要公网可访问的下载 URL，请配置 OPENHARNESS_SOCIAL_FILE_BASE_URL"
-                    logger.warning("%s: %s", reason, media_path)
-                    self._debug_media_event("missing_public_url", media_path=str(path))
-                    return False, reason
-                media = await api.post_c2c_file(
-                    openid=openid,
-                    file_type=file_type,
-                    url=url,
-                    srv_send_msg=False,
-                )
-            
-            self._debug_media_event("upload_done", media=self._jsonable(media))
-            self._msg_seq += 1
-            await api.post_c2c_message(
+
+            await self._upload_and_send_media(
+                api=api,
                 openid=openid,
-                msg_type=7,
-                media=media,
-                msg_id=msg.metadata.get("message_id"),
-                msg_seq=self._msg_seq,
+                path=path,
+                file_type=file_type,
+                use_base64=use_base64,
+                msg=msg,
             )
             self._debug_media_event("send_done", media_path=str(path))
             return True, ""
@@ -246,6 +262,38 @@ class QQChannel(BaseChannel):
             detail = str(exc) or exc.__class__.__name__
             if file_type == 4:
                 detail = f"{detail}；QQ C2C 普通文件(file_type=4)接口可能未开放"
+            if not is_group and file_type == 4 and kind == "audio":
+                await self._send_text(
+                    openid,
+                    f"音频文件按普通文件发送失败：{detail}\n正在尝试改用音频/语音方式发送。",
+                    msg.metadata.get("message_id"),
+                )
+                try:
+                    fallback_file_type = 3
+                    self._debug_media_event(
+                        "fallback_audio_send_start",
+                        media_path=str(path),
+                        original_file_type=file_type,
+                        fallback_file_type=fallback_file_type,
+                        reason=detail,
+                    )
+                    await self._upload_and_send_media(
+                        api=api,
+                        openid=openid,
+                        path=path,
+                        file_type=fallback_file_type,
+                        use_base64=use_base64,
+                        msg=msg,
+                    )
+                    self._debug_media_event(
+                        "fallback_audio_send_done",
+                        media_path=str(path),
+                        fallback_file_type=fallback_file_type,
+                    )
+                    return True, ""
+                except Exception as fallback_exc:
+                    fallback_detail = str(fallback_exc) or fallback_exc.__class__.__name__
+                    detail = f"{detail}；改用音频/语音发送也失败：{fallback_detail}"
             logger.warning("QQ media send failed: %s", detail)
             self._debug_media_event(
                 "send_failed",
@@ -260,6 +308,43 @@ class QQChannel(BaseChannel):
                 error=detail,
             )
             return False, detail
+
+    async def _upload_and_send_media(
+        self,
+        *,
+        api,
+        openid: str,
+        path: Path,
+        file_type: int,
+        use_base64: bool,
+        msg: OutboundMessage,
+    ) -> None:
+        if use_base64:
+            file_data = base64.b64encode(path.read_bytes()).decode("ascii")
+            media = await self._upload_base64_file(api, openid, file_type, file_data, path.name)
+        else:
+            url = self._public_media_url(path)
+            if not url:
+                reason = "QQ 群聊文件接口需要公网可访问的下载 URL，请配置 OPENHARNESS_SOCIAL_FILE_BASE_URL"
+                logger.warning("%s: %s", reason, path)
+                self._debug_media_event("missing_public_url", media_path=str(path))
+                raise RuntimeError(reason)
+            media = await api.post_c2c_file(
+                openid=openid,
+                file_type=file_type,
+                url=url,
+                srv_send_msg=False,
+            )
+
+        self._debug_media_event("upload_done", file_type=file_type, media=self._jsonable(media))
+        self._msg_seq += 1
+        await api.post_c2c_message(
+            openid=openid,
+            msg_type=7,
+            media=media,
+            msg_id=msg.metadata.get("message_id"),
+            msg_seq=self._msg_seq,
+        )
 
     async def _upload_base64_file(self, api, openid: str, file_type: int, file_data: str, file_name: str) -> dict:
         http_client = getattr(api, "_http", None)
@@ -371,15 +456,10 @@ class QQChannel(BaseChannel):
             response = await self._http.get(url)
             response.raise_for_status()
             safe_name = safe_filename(filename) or f"qq-attachment-{idx}"
-            media_dir = resolve_channel_media_dir(self.name)
-            target = (media_dir / safe_name).resolve()
-            media_root = media_dir.resolve()
+            media_root = resolve_channel_media_dir(self.name).resolve()
+            target = allocate_social_file(self.name, safe_name, default_ext=".bin").resolve()
             if not target.is_relative_to(media_root):
                 return None
-            if target.exists():
-                stem = target.stem or "qq-attachment"
-                suffix = target.suffix
-                target = media_root / f"{stem}-{idx}{suffix}"
             target.write_bytes(response.content)
             return str(target)
         except Exception as exc:
@@ -554,3 +634,17 @@ class QQChannel(BaseChannel):
                 handle.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
         except Exception:
             logger.debug("Failed to write QQ media debug log", exc_info=True)
+
+    @staticmethod
+    def _debug_send_event(event: str, **payload) -> None:
+        try:
+            log_path = get_data_dir() / "qq_send_debug.log"
+            record = {
+                "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+                "event": event,
+                **payload,
+            }
+            with log_path.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
+        except Exception:
+            logger.debug("Failed to write QQ send debug log", exc_info=True)

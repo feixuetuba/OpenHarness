@@ -10,6 +10,7 @@ from pathlib import Path
 from pydantic import BaseModel, Field
 
 from openharness.tools.base import BaseTool, ToolExecutionContext, ToolResult
+from openharness.tools.path_aliases import resolve_path
 
 
 class GrepToolInput(BaseModel):
@@ -38,7 +39,7 @@ class GrepTool(BaseTool):
         return True
 
     async def execute(self, arguments: GrepToolInput, context: ToolExecutionContext) -> ToolResult:
-        root = _resolve_path(context.cwd, arguments.root) if arguments.root else context.cwd
+        root = resolve_path(context.cwd, arguments.root) if arguments.root else context.cwd
         if not root.exists():
             return ToolResult(
                 output=(
@@ -139,14 +140,6 @@ def _python_grep_files(
     if not collected:
         return "(no matches)"
     return "\n".join(collected)
-
-
-def _resolve_path(base: Path, candidate: str | None) -> Path:
-    path = Path(candidate or ".").expanduser()
-    if not path.is_absolute():
-        path = base / path
-    return path.resolve()
-
 
 def _format_rg_result(matches: list[str], timeout_seconds: int) -> ToolResult:
     timed_out = bool(matches and matches[-1] == _timeout_marker(timeout_seconds))

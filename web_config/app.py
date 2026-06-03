@@ -113,13 +113,91 @@ def _save_agents_payload(payload: dict[str, Any]) -> None:
 
 
 def _skill_to_dict(skill) -> dict[str, Any]:
+    settings = _get_settings_obj()
+    skill_management = getattr(settings, "skill_management", None)
+    auto_approve = {
+        str(name).strip()
+        for name in getattr(skill_management, "auto_approve_skills", []) or []
+        if str(name).strip()
+    }
+    identifiers = _skill_disabled_identifiers(skill)
     return {
         "name": skill.name,
+        "command_name": skill.command_name,
+        "display_name": skill.display_name,
         "description": skill.description,
         "source": skill.source,
         "path": skill.path,
         "content": skill.content,
+        "enabled": getattr(skill, "enabled", True),
+        "auto_approve": bool(auto_approve.intersection(identifiers)),
     }
+
+
+def _skill_disabled_identifiers(skill) -> set[str]:
+    return {
+        str(value).strip()
+        for value in (skill.name, skill.command_name, skill.display_name, *getattr(skill, "aliases", ()))
+        if str(value).strip()
+    }
+
+
+def _get_path_aliases() -> dict[str, str]:
+    settings = _get_settings_obj()
+    skill_management = getattr(settings, "skill_management", None)
+    aliases = dict(getattr(skill_management, "path_aliases", {}) or {})
+
+    aliases.setdefault("USKILL", "~/.openharness/skills")
+    try:
+        from openharness.config.paths import get_data_dir
+
+        aliases.setdefault("UDATA", str(get_data_dir()))
+    except Exception:
+        aliases.setdefault("UDATA", "~/.openharness/data")
+    aliases.setdefault("UPROJ", str(Path.cwd()))
+    aliases.setdefault("UWEB", str((Path.cwd() / ".openharness" / "media" / "web").resolve()))
+    aliases.setdefault(
+        "SOCIAL",
+        os.environ.get("OPENHARNESS_SOCIAL_DIR")
+        or os.environ.get("OPENHARNESS_SOCIAL_ROOT")
+        or "~/.openharness/social",
+    )
+    normalized: dict[str, str] = {}
+    for raw_name, raw_path in aliases.items():
+        name = re.sub(r"[^A-Za-z0-9_]", "", str(raw_name).strip().lstrip("$"))
+        path = str(raw_path).strip()
+        if name and path:
+            normalized[name] = path
+    return normalized
+
+
+def _expanded_path_aliases() -> dict[str, str]:
+    return {name: str(Path(path).expanduser().resolve()) for name, path in _get_path_aliases().items()}
+
+
+def _compress_path_alias(path: str | Path) -> str:
+    text = str(path)
+    try:
+        resolved = str(Path(text).expanduser().resolve())
+    except OSError:
+        resolved = text
+    for name, prefix in sorted(_expanded_path_aliases().items(), key=lambda item: len(item[1]), reverse=True):
+        if resolved == prefix:
+            return f"${name}"
+        if resolved.startswith(prefix + os.sep):
+            return f"${name}{resolved[len(prefix):]}"
+    return text
+
+
+def _expand_path_alias(path: str) -> str:
+    text = path.strip()
+    for name, prefix in _expanded_path_aliases().items():
+        token = f"${name}"
+        if text == token:
+            return prefix
+        if text.startswith(token + "/"):
+            return prefix + text[len(token):]
+    return text
 
 
 def _model_dump(value: Any) -> dict[str, Any]:
@@ -615,7 +693,7 @@ async def list_skills():
     """List available skills."""
     from openharness.skills import load_skill_registry
 
-    registry = load_skill_registry(Path.cwd())
+    registry = load_skill_registry(Path.cwd(), include_disabled=True)
     return [_skill_to_dict(skill) for skill in registry.list_skills()]
 
 
@@ -624,7 +702,7 @@ async def get_skill(skill_name: str):
     """Get one skill's details."""
     from openharness.skills import load_skill_registry
 
-    skill = load_skill_registry(Path.cwd()).get(skill_name)
+    skill = load_skill_registry(Path.cwd(), include_disabled=True).get(skill_name)
     if skill is None:
         raise HTTPException(status_code=404, detail=f"Skill not found: {skill_name}")
     return _skill_to_dict(skill)
@@ -637,6 +715,60 @@ async def reload_skills():
 
     skills = load_skill_registry(Path.cwd()).list_skills()
     return {"status": "ok", "count": len(skills)}
+
+
+@app.post("/api/skills/{skill_name}/toggle")
+async def toggle_skill(skill_name: str, data: dict):
+    """Enable or disable a skill for model/tool discovery."""
+    from openharness.skills import load_skill_registry
+
+    skill = load_skill_registry(Path.cwd(), include_disabled=True).get(skill_name)
+    if skill is None:
+        raise HTTPException(status_code=404, detail=f"Skill not found: {skill_name}")
+
+    enabled = bool(data.get("enabled", True))
+    settings_data = _load_settings()
+    skill_management = dict(settings_data.get("skill_management") or {})
+    disabled = {
+        str(name).strip()
+        for name in skill_management.get("disabled_skills", [])
+        if str(name).strip()
+    }
+    identifiers = _skill_disabled_identifiers(skill)
+    disabled.difference_update(identifiers)
+    if not enabled:
+        disabled.add(skill.command_name or skill.name)
+    skill_management["disabled_skills"] = sorted(disabled)
+    settings_data["skill_management"] = skill_management
+    _save_settings(settings_data)
+    return {"status": "ok", "skill": skill.command_name or skill.name, "enabled": enabled}
+
+
+@app.post("/api/skills/{skill_name}/auto-approve")
+async def toggle_skill_auto_approve(skill_name: str, data: dict):
+    """Allow or deny automatic tool approval after a skill is used in social channels."""
+    from openharness.skills import load_skill_registry
+
+    skill = load_skill_registry(Path.cwd(), include_disabled=True).get(skill_name)
+    if skill is None:
+        raise HTTPException(status_code=404, detail=f"Skill not found: {skill_name}")
+
+    enabled = bool(data.get("enabled", True))
+    settings_data = _load_settings()
+    skill_management = dict(settings_data.get("skill_management") or {})
+    approved = {
+        str(name).strip()
+        for name in skill_management.get("auto_approve_skills", [])
+        if str(name).strip()
+    }
+    identifiers = _skill_disabled_identifiers(skill)
+    approved.difference_update(identifiers)
+    if enabled:
+        approved.add(skill.command_name or skill.name)
+    skill_management["auto_approve_skills"] = sorted(approved)
+    settings_data["skill_management"] = skill_management
+    _save_settings(settings_data)
+    return {"status": "ok", "skill": skill.command_name or skill.name, "auto_approve": enabled}
 
 
 @app.post("/api/skills/install")
@@ -718,7 +850,7 @@ async def delete_skill(skill_name: str):
     from openharness.skills import load_skill_registry
     from openharness.skills.loader import get_user_skill_dirs
 
-    skill = load_skill_registry(Path.cwd()).get(skill_name)
+    skill = load_skill_registry(Path.cwd(), include_disabled=True).get(skill_name)
     if skill is None:
         raise HTTPException(status_code=404, detail=f"Skill not found: {skill_name}")
     if skill.source != "user" or not skill.path:
@@ -740,7 +872,7 @@ async def download_skill(skill_name: str):
     """Download a skill as a zip file."""
     from openharness.skills import load_skill_registry
 
-    skill = load_skill_registry(Path.cwd()).get(skill_name)
+    skill = load_skill_registry(Path.cwd(), include_disabled=True).get(skill_name)
     if skill is None:
         raise HTTPException(status_code=404, detail=f"Skill not found: {skill_name}")
 
@@ -877,6 +1009,7 @@ async def download_social_file(encoded_path: str, token: str = ""):
     path = Path(raw_path).expanduser().resolve()
     allowed_roots = [
         (Path.cwd() / ".openharness" / "social_outputs").resolve(),
+        (Path(os.environ.get("OPENHARNESS_SOCIAL_DIR") or os.environ.get("OPENHARNESS_SOCIAL_ROOT") or "~/.openharness/social").expanduser()).resolve(),
     ]
     try:
         from openharness.config.paths import get_data_dir
@@ -1028,7 +1161,12 @@ async def receive_wechat_callback(request: Request):
 @app.get("/api/skill-management")
 async def get_skill_management():
     """Get skill management settings."""
-    return _model_dump(_get_settings_obj().skill_management)
+    data = _model_dump(_get_settings_obj().skill_management)
+    aliases = dict(data.get("path_aliases") or {})
+    for name, path in _get_path_aliases().items():
+        aliases.setdefault(name, path)
+    data["path_aliases"] = aliases
+    return data
 
 
 @app.put("/api/skill-management")
@@ -1393,7 +1531,7 @@ async def chat_with_agent(req: AgentChatRequest):
                                             abs_path = str(Path(source_path).expanduser().resolve())
                                             if abs_path not in saved_image_paths:
                                                 saved_image_paths.append(abs_path)
-                                                attachment_notes.append(f"[image: {abs_path}]")
+                                                attachment_notes.append(f"[image: {_compress_path_alias(abs_path)}]")
                                                 debug_log(f"Restored image path from session: {abs_path}")
                                         continue
                                     media_type = block.get("media_type", "image/jpeg")
@@ -1425,7 +1563,7 @@ async def chat_with_agent(req: AgentChatRequest):
                                             abs_path = str(target_path.resolve())
                                             if abs_path not in saved_image_paths:
                                                 saved_image_paths.append(abs_path)
-                                                attachment_notes.append(f"[image: {abs_path}]")
+                                                attachment_notes.append(f"[image: {_compress_path_alias(abs_path)}]")
                                                 debug_log(f"Restored image from session: {abs_path}, size={target_path.stat().st_size}")
                                         except Exception as e:
                                             debug_log(f"Failed to restore image from session: {e}")
@@ -1475,7 +1613,7 @@ async def chat_with_agent(req: AgentChatRequest):
                         target_path.write_bytes(base64.b64decode(img_data))
                         abs_path = str(target_path.resolve())
                         saved_image_paths.append(abs_path)
-                        attachment_notes.append(f"[image: {abs_path}]")
+                        attachment_notes.append(f"[image: {_compress_path_alias(abs_path)}]")
                         file_size = target_path.stat().st_size
                         debug_log(f"Image saved: {abs_path}, size={file_size} bytes")
                     except Exception as e:
@@ -1505,25 +1643,45 @@ async def chat_with_agent(req: AgentChatRequest):
                 )
                 prompt_message = prompt_message + "\n\n" + "\n".join(attachment_notes)
             
-            import os
-            skills_dir = Path(os.path.expanduser("~/.openharness/skills"))
-            if skills_dir.exists():
-                skill_paths = list(skills_dir.glob("*/SKILL.md"))
-                if skill_paths:
-                    skill_info_lines = []
-                    for skill_md in skill_paths:
-                        skill_name = skill_md.parent.name
-                        skill_dir = str(skill_md.parent)
-                        skill_info_lines.append(f"- Skill '{skill_name}' is installed at: {skill_dir}")
-                    if skill_info_lines:
-                        prompt_message = prompt_message + "\n\nAvailable skills:\n" + "\n".join(skill_info_lines)
+            try:
+                from openharness.skills import load_skill_registry
+
+                skill_info_lines = []
+                user_skill_root = Path(os.path.expanduser("~/.openharness/skills")).resolve()
+                for skill in load_skill_registry(Path.cwd()).list_skills():
+                    if not skill.base_dir:
+                        continue
+                    try:
+                        Path(skill.base_dir).expanduser().resolve().relative_to(user_skill_root)
+                    except ValueError:
+                        continue
+                    command_name = skill.command_name or skill.name
+                    description = " ".join((skill.description or "").split())
+                    if len(description) > 120:
+                        description = description[:117].rstrip() + "..."
+                    skill_info_lines.append(
+                        f"- {command_name} at {_compress_path_alias(skill.base_dir)}: {description}"
+                    )
+                if skill_info_lines:
+                    prompt_message = prompt_message + "\n\nAvailable skills:\n" + "\n".join(skill_info_lines[:8])
+            except Exception:
+                logger.exception("Failed to load skills for web prompt")
             
+            compact_output_dir = _compress_path_alias(web_output_dir)
+            alias_lines = [
+                f"- ${name} = {path}"
+                for name, path in sorted(_expanded_path_aliases().items())
+                if name in {"USKILL", "UDATA", "UPROJ", "UWEB", "SOCIAL"}
+            ]
+            alias_text = "Path aliases:\n" + "\n".join(alias_lines) + "\n" if alias_lines else ""
             output_instructions = (
                 "\n\nWeb output requirements:\n"
-                f"- If you generate any image, document, audio, archive, or other file, save it under: {web_output_dir}\n"
+                f"{alias_text}"
+                f"- If you generate any image, document, audio, archive, or other file, save it under: {compact_output_dir}\n"
                 "- To send a generated file to the user, include a standalone marker in the final response, for example:\n"
-                f"  [image: {web_output_dir}/result.jpg]\n"
-                f"  [attachment: {web_output_dir}/result.zip]\n"
+                f"  [image: {compact_output_dir}/result.jpg]\n"
+                f"  [attachment: {compact_output_dir}/result.zip]\n"
+                "- Path aliases such as $USKILL are allowed in markers and will be expanded by the web server.\n"
                 "- Do not say the task is complete or ask the user to view the result unless the file was actually generated and the final response includes its marker.\n"
             )
             prompt_message = prompt_message + output_instructions
@@ -1746,7 +1904,7 @@ async def chat_with_agent(req: AgentChatRequest):
                             if " - " in raw_path:
                                 return match.group(0)
                             
-                            path = Path(raw_path).expanduser()
+                            path = Path(_expand_path_alias(raw_path)).expanduser()
                             if path.is_absolute() and path.exists():
                                 files_to_send.append({"path": str(path), "type": marker})
                                 return ""
@@ -2027,6 +2185,7 @@ async def get_bot_channels():
     settings = _load_settings()
     channels_config = settings.get("channels", {})
     bot_agent_assignments = settings.get("bot_agent_assignments", {})
+    active_agent_id = _load_agents_payload().get("active_agent_id")
     channels = []
 
     for name, status in channel_status.items():
@@ -2040,7 +2199,8 @@ async def get_bot_channels():
             "running": status.get("running", False),
             "online": status.get("online"),
             "last_error": status.get("last_error"),
-            "agent_id": bot_agent_assignments.get(name),
+            "agent_id": bot_agent_assignments.get(name) or active_agent_id,
+            "agent_assignment": bot_agent_assignments.get(name),
             "session_count": 0,
             "sessions": [],
             **channel_cfg,
