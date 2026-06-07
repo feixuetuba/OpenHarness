@@ -58,34 +58,38 @@ def _resolve_image_generation_config(settings) -> dict[str, str]:
     cfg = settings.image_generation
     env_cfg = ImageGenerationConfig.from_env()
     resolved = {
+        "enabled": str(cfg.enabled if cfg.enabled is not None else env_cfg.enabled).lower(),
         "provider": cfg.provider or env_cfg.provider,
         "model": cfg.model or env_cfg.model,
         "api_key": cfg.api_key or env_cfg.api_key,
         "base_url": cfg.base_url or env_cfg.base_url,
         "codex_model": cfg.codex_model or env_cfg.codex_model,
         "codex_base_url": cfg.codex_base_url or env_cfg.codex_base_url,
+        "codex_auth_token": cfg.codex_auth_token or env_cfg.codex_auth_token,
     }
 
-    try:
-        codex_profile = settings.merged_profiles().get("codex") or ProviderProfile(
-            label="Codex Subscription",
-            provider="openai_codex",
-            api_format="openai",
-            auth_source="codex_subscription",
-            default_model="gpt-5.4",
-        )
-        codex_settings = settings.model_copy(
-            update={
-                "active_profile": "codex",
-                "profiles": {**settings.profiles, "codex": codex_profile},
-            }
-        ).materialize_active_profile()
-        codex_auth = codex_settings.resolve_auth()
-        resolved["codex_auth_token"] = codex_auth.value
-        resolved["codex_base_url"] = resolved["codex_base_url"] or (codex_settings.base_url or "")
-        resolved["codex_model"] = resolved["codex_model"] or codex_settings.model
-    except Exception:
-        pass
+    # 如果配置中没有 codex_auth_token，尝试从 Codex profile 中获取
+    if not resolved["codex_auth_token"]:
+        try:
+            codex_profile = settings.merged_profiles().get("codex") or ProviderProfile(
+                label="Codex Subscription",
+                provider="openai_codex",
+                api_format="openai",
+                auth_source="codex_subscription",
+                default_model="gpt-5.4",
+            )
+            codex_settings = settings.model_copy(
+                update={
+                    "active_profile": "codex",
+                    "profiles": {**settings.profiles, "codex": codex_profile},
+                }
+            ).materialize_active_profile()
+            codex_auth = codex_settings.resolve_auth()
+            resolved["codex_auth_token"] = codex_auth.value
+            resolved["codex_base_url"] = resolved["codex_base_url"] or (codex_settings.base_url or "")
+            resolved["codex_model"] = resolved["codex_model"] or codex_settings.model
+        except Exception:
+            pass
 
     return resolved
 
@@ -325,10 +329,12 @@ async def build_runtime(
         "system_prompt": system_prompt,
         "api_key": api_key,
         "api_format": api_format,
-        "active_profile": active_profile,
         "permission_mode": permission_mode,
     }
-    settings = load_settings().merge_cli_overrides(**settings_overrides)
+    settings = load_settings()
+    if active_profile is not None:
+        settings = settings.merge_cli_overrides(active_profile=active_profile)
+    settings = settings.merge_cli_overrides(**settings_overrides)
     cwd = str(Path(cwd).expanduser().resolve()) if cwd else str(Path.cwd())
     normalized_skill_dirs = tuple(str(Path(path).expanduser().resolve()) for path in (extra_skill_dirs or ()))
     normalized_plugin_roots = tuple(str(Path(path).expanduser().resolve()) for path in (extra_plugin_roots or ()))

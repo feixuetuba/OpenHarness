@@ -38,6 +38,11 @@ def get_bundled_skills() -> list[SkillDefinition]:
                 disable_model_invocation=metadata["disable_model_invocation"],
                 model=metadata["model"],
                 argument_hint=metadata["argument_hint"],
+                keywords=metadata["keywords"],
+                trigger=metadata["trigger"],
+                negative_trigger=metadata["negative_trigger"],
+                requires=metadata["requires"],
+                bm25_search_keywords=metadata["bm25_search_keywords"],
             )
         )
     return skills
@@ -58,7 +63,14 @@ def _parse_frontmatter(default_name: str, content: str) -> tuple[str, str]:
 
 
 def _parse_metadata(default_name: str, content: str) -> dict:
-    parsed = parse_skill_metadata(default_name, content, fallback_template="Bundled skill: {name}")
+    from openharness.skills._frontmatter import (
+        optional_frontmatter_str,
+        parse_bool_frontmatter,
+        parse_frontmatter_list,
+        parse_skill_metadata as _parse_skill_frontmatter,
+    )
+
+    parsed = _parse_skill_frontmatter(default_name, content, fallback_template="Bundled skill: {name}")
     frontmatter = parsed.get("frontmatter")
     if not isinstance(frontmatter, dict):
         frontmatter = {}
@@ -72,4 +84,10 @@ def _parse_metadata(default_name: str, content: str) -> dict:
         ),
         "model": optional_frontmatter_str(frontmatter.get("model")),
         "argument_hint": optional_frontmatter_str(frontmatter.get("argument-hint")),
+        # New fields for skill management
+        "keywords": parse_frontmatter_list(frontmatter.get("keywords")),
+        "trigger": optional_frontmatter_str(frontmatter.get("trigger")),
+        "negative_trigger": optional_frontmatter_str(frontmatter.get("negative-trigger")),
+        "requires": parse_frontmatter_list(frontmatter.get("requires")),
+        "bm25_search_keywords": parse_frontmatter_list(frontmatter.get("bm25-search-keywords")),
     }

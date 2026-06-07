@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import json
 import platform
+import time
 from typing import Any, AsyncIterator
 
 import httpx
@@ -19,6 +20,7 @@ from openharness.api.client import (
 from openharness.api.errors import AuthenticationFailure, OpenHarnessApiError, RateLimitFailure, RequestFailure
 from openharness.api.usage import UsageSnapshot
 from openharness.engine.messages import ConversationMessage, ImageBlock, TextBlock, ToolResultBlock, ToolUseBlock
+from openharness.utils.conversation_log import get_or_init_conversation_logger
 
 DEFAULT_CODEX_BASE_URL = "https://chatgpt.com/backend-api"
 JWT_CLAIM_PATH = "https://api.openai.com/auth"
@@ -251,6 +253,8 @@ class CodexApiClient:
             raise self._translate_error(last_error) from last_error
 
     async def _stream_once(self, request: ApiMessageRequest) -> AsyncIterator[ApiStreamEvent]:
+        conv_logger = get_or_init_conversation_logger()
+        request_start_time = time.monotonic() if conv_logger else None
         body: dict[str, Any] = {
             "model": request.model,
             "store": False,
@@ -264,6 +268,18 @@ class CodexApiClient:
         }
         if request.tools:
             body["tools"] = _convert_tools_to_codex(request.tools)
+        if conv_logger:
+            conv_logger.log_request(
+                model=request.model,
+                messages=body["input"],
+                system_prompt=body["instructions"],
+                tools=[
+                    str(tool.get("name"))
+                    for tool in request.tools
+                    if isinstance(tool, dict) and tool.get("name")
+                ],
+                max_tokens=request.max_tokens,
+            )
         effort = _normalize_reasoning_effort(request.effort)
         if effort:
             body["reasoning"] = {"effort": effort}
@@ -349,6 +365,24 @@ class CodexApiClient:
             completed_response or {},
             has_tool_calls=bool(final_message.tool_uses),
         )
+        if conv_logger:
+            conv_logger.log_response(
+                model=request.model,
+                content=final_message.text,
+                reasoning=None,
+                tool_calls=[
+                    {"name": tool_use.name, "id": tool_use.id, "input": tool_use.input}
+                    for tool_use in final_message.tool_uses
+                ] or None,
+                input_tokens=usage.input_tokens,
+                output_tokens=usage.output_tokens,
+                finish_reason=stop_reason,
+                duration_ms=(
+                    (time.monotonic() - request_start_time) * 1000
+                    if request_start_time is not None
+                    else None
+                ),
+            )
         yield ApiMessageCompleteEvent(
             message=final_message,
             usage=usage,

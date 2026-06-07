@@ -31,6 +31,17 @@ def optional_frontmatter_str(value: Any) -> str | None:
     return None
 
 
+def parse_frontmatter_list(value: Any) -> tuple[str, ...]:
+    """Parse a frontmatter value as a list of strings, return empty tuple if absent."""
+    if value is None:
+        return ()
+    if isinstance(value, list):
+        return tuple(str(item).strip() for item in value if str(item).strip())
+    if isinstance(value, str) and value.strip():
+        return (value.strip(),)
+    return ()
+
+
 def parse_skill_metadata(
     default_name: str,
     content: str,

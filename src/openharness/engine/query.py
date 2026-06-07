@@ -44,6 +44,7 @@ from openharness.permissions.checker import PermissionChecker
 from openharness.services.tool_outputs import tool_output_inline_chars, tool_output_preview_chars
 from openharness.tools.base import ToolExecutionContext
 from openharness.tools.base import ToolRegistry
+from openharness.utils.conversation_log import get_or_init_conversation_logger
 
 AUTO_COMPACT_STATUS_MESSAGE = "Auto-compacting conversation memory to keep things fast and focused."
 REACTIVE_COMPACT_STATUS_MESSAGE = "Prompt too long; compacting conversation memory and retrying."
@@ -301,6 +302,34 @@ def _remember_skill_invocation(
     bucket.append(normalized)
     if len(bucket) > MAX_TRACKED_SKILLS:
         del bucket[:-MAX_TRACKED_SKILLS]
+
+
+def _log_conversation_tool_call(
+    *,
+    tool_name: str,
+    tool_use_id: str,
+    tool_input: dict[str, object],
+    tool_output: str | None,
+    is_error: bool,
+    duration_ms: float | None = None,
+    stage: str = "complete",
+    reason: str | None = None,
+    metadata: dict[str, object] | None = None,
+) -> None:
+    conv_logger = get_or_init_conversation_logger()
+    if conv_logger is None:
+        return
+    conv_logger.log_tool_call(
+        tool_name=tool_name,
+        tool_input=tool_input,
+        tool_output=tool_output,
+        is_error=is_error,
+        duration_ms=duration_ms,
+        tool_use_id=tool_use_id,
+        stage=stage,
+        reason=reason,
+        metadata=metadata or {},
+    )
 
 
 def _remember_async_agent_activity(
@@ -951,9 +980,19 @@ async def _execute_tool_call(
             {"tool_name": tool_name, "tool_input": tool_input, "event": HookEvent.PRE_TOOL_USE.value},
         )
         if pre_hooks.blocked:
+            output = pre_hooks.reason or f"pre_tool_use hook blocked {tool_name}"
+            _log_conversation_tool_call(
+                tool_name=tool_name,
+                tool_use_id=tool_use_id,
+                tool_input=tool_input,
+                tool_output=output,
+                is_error=True,
+                stage="pre_hook_blocked",
+                reason=pre_hooks.reason,
+            )
             return ToolResultBlock(
                 tool_use_id=tool_use_id,
-                content=pre_hooks.reason or f"pre_tool_use hook blocked {tool_name}",
+                content=output,
                 is_error=True,
             )
 
@@ -962,9 +1001,19 @@ async def _execute_tool_call(
     tool = context.tool_registry.get(tool_name)
     if tool is None:
         log.warning("unknown tool: %s", tool_name)
+        output = f"Unknown tool: {tool_name}"
+        _log_conversation_tool_call(
+            tool_name=tool_name,
+            tool_use_id=tool_use_id,
+            tool_input=tool_input,
+            tool_output=output,
+            is_error=True,
+            stage="unknown_tool",
+            reason="tool_not_registered",
+        )
         return ToolResultBlock(
             tool_use_id=tool_use_id,
-            content=f"Unknown tool: {tool_name}",
+            content=output,
             is_error=True,
         )
 
@@ -972,9 +1021,19 @@ async def _execute_tool_call(
         parsed_input = tool.input_model.model_validate(tool_input)
     except Exception as exc:
         log.warning("invalid input for %s: %s", tool_name, exc)
+        output = f"Invalid input for {tool_name}: {exc}"
+        _log_conversation_tool_call(
+            tool_name=tool_name,
+            tool_use_id=tool_use_id,
+            tool_input=tool_input,
+            tool_output=output,
+            is_error=True,
+            stage="invalid_input",
+            reason=type(exc).__name__,
+        )
         return ToolResultBlock(
             tool_use_id=tool_use_id,
-            content=f"Invalid input for {tool_name}: {exc}",
+            content=output,
             is_error=True,
         )
 
@@ -1015,16 +1074,36 @@ async def _execute_tool_call(
                 denied = ""
                 if isinstance(context.tool_metadata, dict):
                     denied = str(context.tool_metadata.pop("last_permission_denied", "") or "").strip()
+                output = denied or f"User denied permission for {tool_name}"
+                _log_conversation_tool_call(
+                    tool_name=tool_name,
+                    tool_use_id=tool_use_id,
+                    tool_input=tool_input,
+                    tool_output=output,
+                    is_error=True,
+                    stage="permission_denied",
+                    reason="user_denied",
+                )
                 return ToolResultBlock(
                     tool_use_id=tool_use_id,
-                    content=denied or f"User denied permission for {tool_name}",
+                    content=output,
                     is_error=True,
                 )
         else:
             log.debug("permission blocked for %s: %s", tool_name, decision.reason)
+            output = decision.reason or f"Permission denied for {tool_name}"
+            _log_conversation_tool_call(
+                tool_name=tool_name,
+                tool_use_id=tool_use_id,
+                tool_input=tool_input,
+                tool_output=output,
+                is_error=True,
+                stage="permission_blocked",
+                reason=decision.reason,
+            )
             return ToolResultBlock(
                 tool_use_id=tool_use_id,
-                content=decision.reason or f"Permission denied for {tool_name}",
+                content=output,
                 is_error=True,
             )
 
@@ -1051,25 +1130,51 @@ async def _execute_tool_call(
     except asyncio.TimeoutError:
         elapsed = time.monotonic() - t0
         log.warning("tool execution timed out: name=%s id=%s timeout=%.1fs", tool_name, tool_use_id, timeout_seconds)
+        output = (
+            f"Tool {tool_name} timed out after {timeout_seconds:.0f} seconds. "
+            "The running operation was cancelled; inspect tool logs or retry with a smaller task."
+        )
+        metadata = {"timed_out": True, "timeout_seconds": timeout_seconds, "elapsed_seconds": elapsed}
+        _log_conversation_tool_call(
+            tool_name=tool_name,
+            tool_use_id=tool_use_id,
+            tool_input=tool_input,
+            tool_output=output,
+            is_error=True,
+            duration_ms=elapsed * 1000,
+            stage="timeout",
+            reason="timeout",
+            metadata=metadata,
+        )
         return ToolResultBlock(
             tool_use_id=tool_use_id,
-            content=(
-                f"Tool {tool_name} timed out after {timeout_seconds:.0f} seconds. "
-                "The running operation was cancelled; inspect tool logs or retry with a smaller task."
-            ),
+            content=output,
             is_error=True,
-            result_metadata={"timed_out": True, "timeout_seconds": timeout_seconds, "elapsed_seconds": elapsed},
+            result_metadata=metadata,
         )
     except asyncio.CancelledError:
         raise
     except Exception as exc:
         elapsed = time.monotonic() - t0
         log.exception("tool execution raised: name=%s id=%s", tool_name, tool_use_id)
+        output = f"Tool {tool_name} failed: {type(exc).__name__}: {exc}"
+        metadata = {"elapsed_seconds": elapsed}
+        _log_conversation_tool_call(
+            tool_name=tool_name,
+            tool_use_id=tool_use_id,
+            tool_input=tool_input,
+            tool_output=output,
+            is_error=True,
+            duration_ms=elapsed * 1000,
+            stage="exception",
+            reason=type(exc).__name__,
+            metadata=metadata,
+        )
         return ToolResultBlock(
             tool_use_id=tool_use_id,
-            content=f"Tool {tool_name} failed: {type(exc).__name__}: {exc}",
+            content=output,
             is_error=True,
-            result_metadata={"elapsed_seconds": elapsed},
+            result_metadata=metadata,
         )
     elapsed = time.monotonic() - t0
     log.debug("executed %s in %.2fs err=%s output_len=%d",
@@ -1107,6 +1212,18 @@ async def _execute_tool_call(
                 "event": HookEvent.POST_TOOL_USE.value,
             },
         )
+
+    _log_conversation_tool_call(
+        tool_name=tool_name,
+        tool_use_id=tool_use_id,
+        tool_input=tool_input,
+        tool_output=tool_result.content,
+        is_error=tool_result.is_error,
+        duration_ms=elapsed * 1000,
+        stage="complete",
+        metadata=tool_result.result_metadata,
+    )
+
     return tool_result
 
 

@@ -274,6 +274,11 @@ def _load_plugin_skills(path: Path) -> list[SkillDefinition]:
                 disable_model_invocation=metadata["disable_model_invocation"],
                 model=metadata["model"],
                 argument_hint=metadata["argument_hint"],
+                keywords=metadata["keywords"],
+                trigger=metadata["trigger"],
+                negative_trigger=metadata["negative_trigger"],
+                requires=metadata["requires"],
+                bm25_search_keywords=metadata["bm25_search_keywords"],
             )
         )
         return skills
@@ -302,6 +307,11 @@ def _load_plugin_skills(path: Path) -> list[SkillDefinition]:
                 disable_model_invocation=metadata["disable_model_invocation"],
                 model=metadata["model"],
                 argument_hint=metadata["argument_hint"],
+                keywords=metadata["keywords"],
+                trigger=metadata["trigger"],
+                negative_trigger=metadata["negative_trigger"],
+                requires=metadata["requires"],
+                bm25_search_keywords=metadata["bm25_search_keywords"],
             )
         )
     return skills

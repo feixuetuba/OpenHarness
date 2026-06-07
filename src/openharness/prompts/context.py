@@ -19,17 +19,62 @@ from openharness.personalization.rules import load_local_rules
 from openharness.permissions.modes import PermissionMode
 from openharness.prompts.claudemd import load_claude_md_prompt
 from openharness.prompts.system_prompt import build_system_prompt
+from openharness.skills.index import SkillIndex
 from openharness.skills.loader import load_skill_registry
+from openharness.skills.types import SkillCandidate, SkillDefinition
+from openharness.utils.conversation_log import get_or_init_conversation_logger
+
+
+_DEFAULT_SKILL_CANDIDATE_LIMIT = 5
+
+
+def _candidate_from_skill(skill: SkillDefinition) -> SkillCandidate:
+    return SkillCandidate(
+        skill_name=skill.command_name or skill.name,
+        description=skill.trigger or skill.description,
+        trigger=skill.trigger,
+        negative_trigger=skill.negative_trigger,
+        source=skill.source,
+        trust_level=None,
+        score=0.0,
+        match_type="fallback",
+    )
+
+
+def _format_skill_candidate(candidate: SkillCandidate) -> str:
+    details = [candidate.trigger or candidate.description]
+    if candidate.negative_trigger:
+        details.append(f"Do not use when: {candidate.negative_trigger}")
+    if candidate.source:
+        source = candidate.source
+        if candidate.trust_level:
+            source = f"{source}, trust={candidate.trust_level}"
+        details.append(f"source={source}")
+    return f"- **{candidate.skill_name}**: " + " ".join(part for part in details if part)
+
+
+def _candidate_log_record(candidate: SkillCandidate) -> dict[str, object]:
+    return {
+        "skill_name": candidate.skill_name,
+        "description": candidate.description,
+        "trigger": candidate.trigger,
+        "negative_trigger": candidate.negative_trigger,
+        "source": candidate.source,
+        "trust_level": candidate.trust_level,
+        "score": candidate.score,
+        "match_type": candidate.match_type,
+    }
 
 
 def _build_skills_section(
     cwd: str | Path,
     *,
+    latest_user_prompt: str | None = None,
     extra_skill_dirs: Iterable[str | Path] | None = None,
     extra_plugin_roots: Iterable[str | Path] | None = None,
     settings: Settings | None = None,
 ) -> str | None:
-    """Build a system prompt section listing available skills."""
+    """Build a system prompt section with lightweight recalled skill candidates."""
     registry = load_skill_registry(
         cwd,
         extra_skill_dirs=extra_skill_dirs,
@@ -39,19 +84,60 @@ def _build_skills_section(
     skills = [skill for skill in registry.list_skills() if not skill.disable_model_invocation]
     if not skills:
         return None
+
+    debug_mode = False
+    skill_management = getattr(settings, "skill_management", None) if settings is not None else None
+    if skill_management is not None:
+        debug_mode = bool(getattr(skill_management, "debug_mode", False))
+
+    candidates: list[SkillCandidate]
+    if latest_user_prompt:
+        index = SkillIndex()
+        index.build(skills, debug_mode=debug_mode)
+        candidates = index.recall(latest_user_prompt, top_k=_DEFAULT_SKILL_CANDIDATE_LIMIT)
+    else:
+        candidates = [
+            _candidate_from_skill(skill)
+            for skill in skills[:_DEFAULT_SKILL_CANDIDATE_LIMIT]
+        ]
+
+    if not candidates:
+        conv_logger = get_or_init_conversation_logger()
+        if conv_logger:
+            conv_logger.log_skill_recall(
+                latest_user_prompt,
+                [],
+                source="prompt",
+                reason="no_candidates",
+            )
+        lines = [
+            "# Available Skill Candidates",
+            "",
+            "No high-confidence skill candidates were recalled for the current request. "
+            "If a skill would help, call `skill_search(query=\"...\")` to search available skills.",
+        ]
+        return "\n".join(lines)
+
+    shown_names = [candidate.skill_name for candidate in candidates]
+    conv_logger = get_or_init_conversation_logger()
+    if conv_logger:
+        conv_logger.log_skill_recall(
+            latest_user_prompt,
+            [_candidate_log_record(candidate) for candidate in candidates],
+            source="prompt",
+        )
     lines = [
-        "# Available Skills",
+        "# Available Skill Candidates",
         "",
-        "The following skills are available via the `skill` tool. "
-        "When a user's request matches a skill, invoke it with `skill(name=\"<skill_name>\")` "
-        "to load detailed instructions before proceeding. "
-        "User-invocable skills can also be run directly by the user as `/<skill-name>`.",
+        "The following lightweight skill candidates were recalled for the current request. "
+        "Only call `skill(name=\"<skill_name>\")` when the user's request clearly matches "
+        "a candidate's trigger "
+        "and does not match its negative trigger. "
+        "If these candidates are insufficient, call "
+        f"`skill_search(query=\"...\", exclude_names={shown_names!r})` to search more skills.",
         "",
     ]
-    for skill in skills:
-        command_name = skill.command_name or skill.name
-        display = f" ({skill.display_name})" if skill.display_name else ""
-        lines.append(f"- **{command_name}**{display}: {skill.description}")
+    lines.extend(_format_skill_candidate(candidate) for candidate in candidates)
     return "\n".join(lines)
 
 
@@ -133,6 +219,7 @@ def build_runtime_system_prompt(
 
     skills_section = _build_skills_section(
         cwd,
+        latest_user_prompt=latest_user_prompt,
         extra_skill_dirs=extra_skill_dirs,
         extra_plugin_roots=extra_plugin_roots,
         settings=settings,

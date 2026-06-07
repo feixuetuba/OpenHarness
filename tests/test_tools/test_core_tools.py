@@ -24,6 +24,7 @@ from openharness.tools.grep_tool import GrepTool, GrepToolInput
 from openharness.tools.lsp_tool import LspTool, LspToolInput
 from openharness.tools.notebook_edit_tool import NotebookEditTool, NotebookEditToolInput
 from openharness.tools.remote_trigger_tool import RemoteTriggerTool, RemoteTriggerToolInput
+from openharness.tools.skill_search_tool import SkillSearchTool, SkillSearchToolInput
 from openharness.tools.skill_tool import SkillTool, SkillToolInput
 from openharness.tools.todo_write_tool import TodoWriteTool, TodoWriteToolInput
 from openharness.tools.tool_search_tool import ToolSearchTool, ToolSearchToolInput
@@ -212,8 +213,8 @@ async def test_skill_todo_and_config_tools(tmp_path: Path, monkeypatch):
         ToolExecutionContext(cwd=tmp_path),
     )
     assert "Helpful pytest notes." in skill_result.output
-    assert f"Skill directory: {pytest_dir}" in skill_result.output
-    assert f"cd {pytest_dir} && <command>" in skill_result.output
+    assert "Skill directory: $UPROJ/config/skills/pytest" in skill_result.output
+    assert "cd '$UPROJ/config/skills/pytest' && <command>" in skill_result.output
 
     todo_result = await TodoWriteTool().execute(
         TodoWriteToolInput(item="wire commands"),
@@ -227,6 +228,59 @@ async def test_skill_todo_and_config_tools(tmp_path: Path, monkeypatch):
         ToolExecutionContext(cwd=tmp_path),
     )
     assert config_result.output == "Updated theme"
+
+
+@pytest.mark.asyncio
+async def test_skill_search_excludes_public_skill_names(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(tmp_path / "config"))
+    skills_dir = tmp_path / "config" / "skills"
+    chart_dir = skills_dir / "chart"
+    chart_dir.mkdir(parents=True)
+    (chart_dir / "SKILL.md").write_text(
+        "---\n"
+        "keywords:\n"
+        "  - chart\n"
+        "aliases:\n"
+        "  - plot\n"
+        "trigger: Use for structured data charts.\n"
+        "---\n\n"
+        "# Chart\n",
+        encoding="utf-8",
+    )
+
+    result = await SkillSearchTool().execute(
+        SkillSearchToolInput(query="chart plot", exclude_names=["chart"]),
+        ToolExecutionContext(cwd=tmp_path),
+    )
+
+    assert "- chart:" not in result.output
+
+
+@pytest.mark.asyncio
+async def test_skill_search_returns_matches_and_honors_limit(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(tmp_path / "config"))
+    skills_dir = tmp_path / "config" / "skills"
+    for name in ("chart-a", "chart-b", "deploy"):
+        skill_dir = skills_dir / name
+        skill_dir.mkdir(parents=True)
+        keyword = "chart" if name.startswith("chart") else "deploy"
+        skill_dir.joinpath("SKILL.md").write_text(
+            "---\n"
+            f"keywords:\n  - {keyword}\n"
+            f"trigger: Use for {name} workflows.\n"
+            "---\n\n"
+            f"# {name}\n",
+            encoding="utf-8",
+        )
+
+    result = await SkillSearchTool().execute(
+        SkillSearchToolInput(query="chart", limit=1),
+        ToolExecutionContext(cwd=tmp_path),
+    )
+
+    matches = [line for line in result.output.splitlines() if line.startswith("- ")]
+    assert len(matches) == 1
+    assert matches[0].startswith(("- chart-a:", "- chart-b:"))
 
 
 @pytest.mark.asyncio

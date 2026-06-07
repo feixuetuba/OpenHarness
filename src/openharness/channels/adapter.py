@@ -14,16 +14,23 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from typing import TYPE_CHECKING, Awaitable, Callable
 
 from openharness.channels.bus.events import InboundMessage, OutboundMessage
 from openharness.channels.bus.queue import MessageBus
 from openharness.engine.stream_events import AssistantTextDelta, AssistantTurnComplete
+from openharness.utils.conversation_log import ConversationSource, init_conversation_logger
 
 if TYPE_CHECKING:
     from openharness.engine.query_engine import QueryEngine
 
 logger = logging.getLogger(__name__)
+
+
+def _conversation_session_id(msg: InboundMessage) -> str:
+    raw = f"{msg.channel}_{msg.session_key}"
+    return re.sub(r"[^A-Za-z0-9_.-]+", "_", raw)[:120] or "bot"
 
 
 class ChannelBridge:
@@ -107,6 +114,20 @@ class ChannelBridge:
 
     async def _handle(self, msg: InboundMessage) -> None:
         """Process one inbound message and publish the reply."""
+        conv_logger = init_conversation_logger(
+            source=ConversationSource.BOT,
+            session_id=_conversation_session_id(msg),
+        )
+        conv_logger.log_metadata(
+            "inbound_message",
+            {
+                "channel": msg.channel,
+                "chat_id": msg.chat_id,
+                "sender_id": msg.sender_id,
+                "session_key": msg.session_key,
+                "content": msg.content,
+            },
+        )
         logger.info(
             "ChannelBridge received from %s/%s, content=%s",
             msg.channel,
@@ -150,6 +171,15 @@ class ChannelBridge:
         if not reply_text:
             logger.debug("ChannelBridge: empty reply, skipping publish")
             return
+        conv_logger.log_metadata(
+            "outbound_message",
+            {
+                "channel": msg.channel,
+                "chat_id": msg.chat_id,
+                "session_key": msg.session_key,
+                "content": reply_text,
+            },
+        )
 
         sessions = self._get_channel_sessions(msg.channel) if self._get_channel_sessions else None
         if sessions is not None:

@@ -91,6 +91,15 @@ class ImageGenerationTool(BaseTool):
         config = context.metadata.get("image_generation_config", {})
         if not isinstance(config, dict):
             config = {}
+        
+        # 检查是否启用
+        enabled = str(config.get("enabled", "true")).strip().lower()
+        if enabled not in {"true", "1", "yes"}:
+            return ToolResult(
+                output="image_generation tool is disabled. Set image_generation.enabled=true to enable.",
+                is_error=True
+            )
+        
         provider = _resolve_provider(arguments.provider, config)
 
         try:

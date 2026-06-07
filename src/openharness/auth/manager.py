@@ -37,6 +37,7 @@ _KNOWN_PROVIDERS = [
     "moonshot",
     "gemini",
     "minimax",
+    "nvidia",
     "modelscope",
 ]
 
@@ -52,6 +53,7 @@ _AUTH_SOURCES = [
     "moonshot_api_key",
     "gemini_api_key",
     "minimax_api_key",
+    "nvidia_api_key",
     "modelscope_api_key",
 ]
 
@@ -64,6 +66,7 @@ _PROFILE_BY_PROVIDER = {
     "moonshot": "moonshot",
     "gemini": "gemini",
     "minimax": "minimax",
+    "nvidia": "nvidia",
     "modelscope": "modelscope",
 }
 
@@ -132,7 +135,9 @@ class AuthManager:
                     configured = True
                     origin = "env"
                     state = "configured"
-                elif load_credential(storage_provider, "api_key") or getattr(self.settings, "api_key", ""):
+                elif load_credential(storage_provider, "api_key") or (
+                    active_profile.auth_source == source and getattr(self.settings, "api_key", "")
+                ):
                     configured = True
                     origin = "file"
                     state = "configured"
@@ -162,6 +167,15 @@ class AuthManager:
                     state = "configured"
             elif source == "modelscope_api_key":
                 if os.environ.get("MODELSCOPE_API_KEY"):
+                    configured = True
+                    origin = "env"
+                    state = "configured"
+                elif load_credential(storage_provider, "api_key"):
+                    configured = True
+                    origin = "file"
+                    state = "configured"
+            elif source == "nvidia_api_key":
+                if os.environ.get("NVIDIA_API_KEY"):
                     configured = True
                     origin = "env"
                     state = "configured"
@@ -210,7 +224,9 @@ class AuthManager:
                 if os.environ.get("ANTHROPIC_API_KEY"):
                     configured = True
                     source = "env"
-                elif load_credential("anthropic", "api_key") or getattr(self.settings, "api_key", ""):
+                elif load_credential("anthropic", "api_key") or (
+                    active == provider and getattr(self.settings, "api_key", "")
+                ):
                     configured = True
                     source = "file"
 
@@ -265,6 +281,14 @@ class AuthManager:
                     configured = True
                     source = "file"
 
+            elif provider == "nvidia":
+                if os.environ.get("NVIDIA_API_KEY"):
+                    configured = True
+                    source = "env"
+                elif load_credential("nvidia", "api_key"):
+                    configured = True
+                    source = "file"
+
             elif provider == "modelscope":
                 if os.environ.get("MODELSCOPE_API_KEY"):
                     configured = True
@@ -299,7 +323,8 @@ class AuthManager:
             auth_state = str(source_status.get("state", "missing"))
             if auth_source_uses_api_key(profile.auth_source):
                 storage_provider = credential_storage_provider_name(name, profile)
-                configured = bool(load_credential(storage_provider, "api_key")) or configured
+                stored = bool(load_credential(storage_provider, "api_key"))
+                configured = stored or (configured if not profile.credential_slot else False)
                 if not configured and name == active and getattr(self.settings, "api_key", ""):
                     configured = True
                 auth_state = "configured" if configured else "missing"

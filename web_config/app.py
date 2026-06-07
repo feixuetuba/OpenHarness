@@ -360,6 +360,7 @@ def _zip_skill_root(members: list[zipfile.ZipInfo]) -> Path:
 
 class ProfileUpdate(BaseModel):
     last_model: str | None = None
+    default_model: str | None = None
     base_url: str | None = None
     label: str | None = None
 
@@ -385,6 +386,7 @@ class AgentConfig(BaseModel):
     id: str
     name: str
     system_prompt: str = ""
+    profile: str | None = None
     model: str | None = None
     max_turns: int | None = None
 
@@ -412,12 +414,24 @@ async def index():
 @app.get("/api/settings")
 async def get_settings():
     """Get all current settings."""
+    from openharness.auth.manager import AuthManager
+    from openharness.config.settings import builtin_provider_profile_names
+
     settings = _get_settings_obj()
     profiles = settings.merged_profiles()
+    manager = AuthManager(settings)
+    profile_statuses = manager.get_profile_statuses()
+    builtin_names = builtin_provider_profile_names()
 
     # Build profile list with status
     profile_list = []
     for name, profile in profiles.items():
+        status = profile_statuses.get(name, {})
+        configured = bool(status.get("configured"))
+        is_active = name == settings.active_profile
+        is_custom = name not in builtin_names
+        if not (configured or is_custom):
+            continue
         profile_list.append({
             "name": name,
             "label": profile.label,
@@ -426,8 +440,14 @@ async def get_settings():
             "auth_source": profile.auth_source,
             "default_model": profile.default_model,
             "last_model": profile.last_model or "",
+            "allowed_models": profile.allowed_models,
             "base_url": profile.base_url or "",
-            "active": name == settings.active_profile,
+            "active": is_active,
+            "configured": configured,
+            "auth_state": status.get("auth_state", "missing"),
+            "builtin": name in builtin_names,
+            "credential_slot": profile.credential_slot,
+            "credential_configured": configured,
         })
 
     return {
@@ -477,6 +497,8 @@ async def update_profile(profile_name: str, update: ProfileUpdate):
     updates = {}
     if update.last_model is not None:
         updates["last_model"] = update.last_model if update.last_model else ""
+    if update.default_model is not None:
+        updates["default_model"] = update.default_model if update.default_model else ""
     if update.base_url is not None:
         updates["base_url"] = update.base_url if update.base_url else None
     if update.label is not None:
@@ -515,6 +537,27 @@ async def set_api_key(auth_source: str, update: ApiKeyUpdate):
     manager.store_profile_credential(target_profile, "api_key", update.api_key)
 
     return {"status": "ok"}
+
+
+@app.post("/api/profile/{profile_name}/set-key")
+async def set_profile_api_key(profile_name: str, update: ApiKeyUpdate):
+    """Set an API key for one specific profile."""
+    from openharness.auth.manager import AuthManager
+    from openharness.config.settings import auth_source_uses_api_key, builtin_provider_profile_names
+
+    manager = AuthManager()
+    profiles = manager.list_profiles()
+    profile = profiles.get(profile_name)
+    if profile is None:
+        raise HTTPException(status_code=404, detail=f"Profile not found: {profile_name}")
+    if not auth_source_uses_api_key(profile.auth_source):
+        raise HTTPException(status_code=400, detail=f"Profile {profile_name} does not use API key auth")
+
+    if profile_name not in builtin_provider_profile_names() and not profile.credential_slot:
+        manager.update_profile(profile_name, credential_slot=profile_name)
+
+    manager.store_profile_credential(profile_name, "api_key", update.api_key)
+    return {"status": "ok", "profile": profile_name}
 
 
 @app.put("/api/settings")
@@ -561,10 +604,17 @@ async def list_providers():
     from openharness.config.settings import default_provider_profiles
 
     profiles = default_provider_profiles()
+    suggested_names = {
+        "claude-api": "anthropic-api",
+        "claude-subscription": "claude-subscription-profile",
+        "openai-compatible": "openai-compatible-api",
+        "codex": "codex-subscription-profile",
+        "qwen": "qwen-dashscope",
+    }
     result = []
     for name, profile in profiles.items():
         result.append({
-            "name": name,
+            "name": suggested_names.get(name, f"{name}-profile"),
             "label": profile.label,
             "provider": profile.provider,
             "api_format": profile.api_format,
@@ -579,19 +629,32 @@ async def list_providers():
 async def add_profile(profile_data: dict):
     """Add a custom provider profile."""
     from openharness.auth.manager import AuthManager
-    from openharness.config.settings import ProviderProfile
+    from openharness.config.settings import ProviderProfile, auth_source_uses_api_key
 
-    name = profile_data.get("name", "")
+    name = str(profile_data.get("name", "")).strip()
     if not name:
         raise HTTPException(status_code=400, detail="Profile name is required")
+    safe_name = re.sub(r"[^A-Za-z0-9_.-]+", "-", name).strip("-")
+    if safe_name != name:
+        raise HTTPException(status_code=400, detail="Profile name can only contain letters, numbers, '.', '_' and '-'")
+
+    provider = str(profile_data.get("provider", "openai") or "openai").strip()
+    api_format = str(profile_data.get("api_format", "openai") or "openai").strip()
+    auth_source = str(profile_data.get("auth_source") or "").strip()
+    if not auth_source:
+        auth_source = f"{provider}_api_key" if api_format == "openai" else "anthropic_api_key"
+    credential_slot = profile_data.get("credential_slot")
+    if credential_slot is None and auth_source_uses_api_key(auth_source):
+        credential_slot = name
 
     profile = ProviderProfile(
         label=profile_data.get("label", name),
-        provider=profile_data.get("provider", "openai"),
-        api_format=profile_data.get("api_format", "openai"),
-        auth_source=profile_data.get("auth_source", "openai_api_key"),
-        default_model=profile_data.get("default_model", "gpt-4"),
+        provider=provider,
+        api_format=api_format,
+        auth_source=auth_source,
+        default_model=str(profile_data.get("default_model") or ""),
         base_url=profile_data.get("base_url") or None,
+        credential_slot=credential_slot,
     )
 
     manager = AuthManager()
@@ -1392,7 +1455,17 @@ async def test_connection(req: dict):
     base_url = str(req.get("base_url", "")).strip().rstrip("/")
     if not base_url:
         return {"success": False, "message": "base_url is required", "models": []}
-    api_key = str(req.get("api_key") or "sk-placeholder")
+    api_key = str(req.get("api_key") or "").strip()
+    profile_name = str(req.get("profile_name") or "").strip()
+    if not api_key and profile_name:
+        try:
+            settings = _get_settings_obj()
+            profile_settings = settings.model_copy(update={"active_profile": profile_name}).materialize_active_profile()
+            api_key = profile_settings.resolve_auth().value
+        except Exception:
+            api_key = ""
+    if not api_key:
+        api_key = "sk-placeholder"
     api_format = str(req.get("api_format") or "openai").lower()
     url = f"{base_url}/models" if base_url.endswith("/v1") else f"{base_url}/v1/models"
     headers = {"Content-Type": "application/json"}
@@ -1436,6 +1509,11 @@ async def chat_with_agent(req: AgentChatRequest):
         )
         from openharness.services import session_storage
         from openharness.ui.runtime import build_runtime, close_runtime
+        from openharness.utils.conversation_log import (
+            ConversationSource,
+            init_context_conversation_logger,
+            reset_conversation_logger,
+        )
 
         def sse(event: str, data: dict[str, Any]) -> str:
             return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
@@ -1450,6 +1528,21 @@ async def chat_with_agent(req: AgentChatRequest):
                 agent = next((item for item in payload["agents"] if item.get("id") == agent_id), None)
 
             session_id = (req.session_id or "").strip() or f"session_{int(time.time() * 1000)}"
+            conversation_token = None
+            conv_logger, conversation_token = init_context_conversation_logger(
+                ConversationSource.WEB,
+                session_id=session_id,
+            )
+            conv_logger.log_metadata(
+                "web_chat",
+                {
+                    "session_id": session_id,
+                    "agent_id": agent_id or None,
+                    "agent_name": agent.get("name") if agent else None,
+                    "agent_profile": agent.get("profile") if agent else None,
+                    "agent_model": agent.get("model") if agent else None,
+                },
+            )
             saved_session = session_storage.load_session_by_id(Path.cwd(), session_id)
             restore_messages = saved_session.get("messages") if saved_session else None
             restore_metadata = saved_session.get("tool_metadata") if saved_session else None
@@ -1470,6 +1563,9 @@ async def chat_with_agent(req: AgentChatRequest):
             debug_log("=" * 80)
             debug_log("NEW CHAT REQUEST STARTED")
             debug_log(f"Session ID: {session_id}")
+            debug_log(f"Agent ID: {agent_id or '(default)'}")
+            if agent:
+                debug_log(f"Agent profile: {agent.get('profile') or '(default)'}, model: {agent.get('model') or '(default)'}")
             debug_log(f"Original message: {message}")
 
             def use_path_only_images_for_current_provider() -> bool:
@@ -1518,11 +1614,13 @@ async def chat_with_agent(req: AgentChatRequest):
             if restore_messages:
                 debug_log(f"Restoring messages from session: {len(restore_messages)} messages")
                 for msg in restore_messages:
-                    if msg.get("role") == "user":
+                    # 处理用户消息和助手消息中的图片路径
+                    if msg.get("role") in ("user", "assistant"):
                         content = msg.get("content", [])
                         if isinstance(content, list):
-                            debug_log(f"  User message with {len(content)} content blocks")
+                            debug_log(f"  {msg.get('role').capitalize()} message with {len(content)} content blocks")
                             for block in content:
+                                # 处理图片块
                                 if isinstance(block, dict) and block.get("type") == "image":
                                     debug_log(f"  Found image block in session: keys={list(block.keys())}")
                                     if path_only_images:
@@ -1567,6 +1665,20 @@ async def chat_with_agent(req: AgentChatRequest):
                                                 debug_log(f"Restored image from session: {abs_path}, size={target_path.stat().st_size}")
                                         except Exception as e:
                                             debug_log(f"Failed to restore image from session: {e}")
+                                # 处理文本块中的图片路径标记（如 [image: /path/to/image.jpg]）
+                                elif isinstance(block, dict) and block.get("type") == "text":
+                                    text = block.get("text", "")
+                                    import re
+                                    # 匹配 [image: /path/to/image.jpg] 格式的路径
+                                    image_pattern = r'\[image:\s*([^\]]+\.(?:jpg|jpeg|png|webp|gif))\]'
+                                    matches = re.findall(image_pattern, text, re.IGNORECASE)
+                                    for match in matches:
+                                        img_path = match.strip()
+                                        if Path(img_path).exists():
+                                            abs_path = str(Path(img_path).expanduser().resolve())
+                                            if abs_path not in saved_image_paths:
+                                                saved_image_paths.append(abs_path)
+                                                debug_log(f"Found image path in text block: {abs_path}")
                                 else:
                                     debug_log(f"  Content block type: {block.get('type', 'unknown')}")
             
@@ -1730,6 +1842,7 @@ async def chat_with_agent(req: AgentChatRequest):
             bundle = await build_runtime(
                 prompt="[Session initialized]",
                 cwd=str(Path.cwd()),
+                active_profile=agent.get("profile") if agent else None,
                 model=agent.get("model") if agent else None,
                 max_turns=agent.get("max_turns") if agent else None,
                 system_prompt=agent.get("system_prompt") if agent else None,
@@ -1749,11 +1862,143 @@ async def chat_with_agent(req: AgentChatRequest):
             tool_errors = []
             tool_names = []
             sent_file_paths = []
-            expects_generated_media = bool(saved_image_paths or image_attachments) and any(
-                keyword in message for keyword in (
-                    "生成", "证件照", "图片", "照片", "photo", "image", *continuation_keywords
-                )
+            generated_media_keywords = (
+                "生成",
+                "绘制",
+                "画图",
+                "画一",
+                "图片",
+                "照片",
+                "图像",
+                "photo",
+                "image",
+                "draw",
+                "paint",
+                *continuation_keywords,
             )
+            expects_generated_media = bool(saved_image_paths or image_attachments) or any(
+                keyword in message.lower() for keyword in generated_media_keywords
+            )
+
+            async def try_direct_image_generation() -> list[str] | None:
+                if not agent or not expects_generated_media:
+                    return None
+                model_name = str(agent.get("model") or "").strip()
+                profile_name = str(agent.get("profile") or "").strip()
+                if "image" not in model_name.lower() or not profile_name:
+                    return None
+
+                import httpx
+                from openharness.api.usage import UsageSnapshot
+
+                settings = _get_settings_obj()
+                profile_settings = settings.model_copy(
+                    update={"active_profile": profile_name}
+                ).materialize_active_profile()
+                auth = profile_settings.resolve_auth()
+                base_url = (profile_settings.base_url or "").rstrip("/")
+                if not base_url:
+                    raise RuntimeError(f"Profile {profile_name} has no Base URL")
+                image_url = f"{base_url}/images/generations" if base_url.endswith("/v1") else f"{base_url}/v1/images/generations"
+                prompt = message.strip()
+                debug_log(f"Direct image generation: profile={profile_name}, model={model_name}, url={image_url}")
+                conv_logger.log_request(
+                    model=model_name,
+                    messages=[{"role": "user", "content": prompt}],
+                    system_prompt=agent.get("system_prompt") or None,
+                    tools=[],
+                    source="web_direct_image_generation",
+                    profile=profile_name,
+                )
+                async with httpx.AsyncClient(timeout=120.0) as client:
+                    response = await client.post(
+                        image_url,
+                        headers={
+                            "Authorization": f"Bearer {auth.value}",
+                            "Content-Type": "application/json",
+                        },
+                        json={
+                            "model": model_name,
+                            "prompt": prompt,
+                            "n": 1,
+                        },
+                    )
+                    response.raise_for_status()
+                    payload = response.json()
+
+                    data_items = payload.get("data") if isinstance(payload, dict) else None
+                    if not isinstance(data_items, list) or not data_items:
+                        raise RuntimeError("image generation returned no data")
+                    first = data_items[0] if isinstance(data_items[0], dict) else {}
+                    image_b64 = str(first.get("b64_json") or "")
+                    image_bytes: bytes | None = None
+                    if image_b64:
+                        image_bytes = base64.b64decode(image_b64)
+                    else:
+                        result_url = str(first.get("url") or "")
+                        if result_url.startswith("data:image/") and ";base64," in result_url:
+                            image_bytes = base64.b64decode(result_url.split(";base64,", 1)[1])
+                        elif result_url:
+                            image_response = await client.get(result_url)
+                            image_response.raise_for_status()
+                            image_bytes = image_response.content
+                    if not image_bytes:
+                        raise RuntimeError("image generation returned no image bytes")
+
+                image_path = web_output_dir / "generated_image.png"
+                counter = 1
+                while image_path.exists():
+                    image_path = web_output_dir / f"generated_image_{counter}.png"
+                    counter += 1
+                image_path.write_bytes(image_bytes)
+                encoded = base64.b64encode(image_bytes).decode("ascii")
+                text = f"已生成图片：{image_path.name}"
+                conv_logger.log_response(
+                    model=model_name,
+                    content=text,
+                    finish_reason="image_generated",
+                    source="web_direct_image_generation",
+                    profile=profile_name,
+                    image_path=str(image_path),
+                )
+                events = [sse("text", {"text": text})]
+                events.append(sse(
+                    "file",
+                    {
+                        "path": str(image_path),
+                        "name": image_path.name,
+                        "type": "image",
+                        "data": encoded,
+                        "size": len(image_bytes),
+                    },
+                ))
+                assistant_message = ConversationMessage(
+                    role="assistant",
+                    content=[TextBlock(text=f"{text}\n[image: {image_path}]")],
+                )
+                session_storage.save_session_snapshot(
+                    cwd=Path.cwd(),
+                    model=model_name,
+                    system_prompt=agent.get("system_prompt") or "",
+                    messages=[user_message, assistant_message],
+                    usage=UsageSnapshot(),
+                    session_id=session_id,
+                    tool_metadata={
+                        "session_id": session_id,
+                        "agent_id": agent_id,
+                        "agent_profile": profile_name,
+                    },
+                )
+                sent_file_paths.append(str(image_path))
+                response_text_parts.append(text)
+                return events
+
+            direct_image_events = await try_direct_image_generation()
+            if direct_image_events:
+                for event_payload in direct_image_events:
+                    yield event_payload
+                yield sse("done", {"session_id": session_id})
+                return
 
             def format_tool_failure(tool_errors: list[dict[str, Any]]) -> str:
                 last = tool_errors[-1] if tool_errors else {}
@@ -1999,6 +2244,11 @@ async def chat_with_agent(req: AgentChatRequest):
         except Exception as exc:
             yield sse("error", {"message": str(exc) or exc.__class__.__name__})
         finally:
+            if 'conversation_token' in locals() and conversation_token is not None:
+                try:
+                    reset_conversation_logger(conversation_token)
+                except Exception:
+                    pass
             if bundle is not None:
                 try:
                     await close_runtime(bundle)

@@ -29,6 +29,7 @@ from openharness.engine.stream_events import (
 from openharness.engine.query_engine import QueryEngine
 from openharness.tools.base import ToolRegistry
 from openharness.tools.skill_permission import infer_skill_from_tool_call, skill_is_approved
+from openharness.utils.conversation_log import ConversationSource, init_conversation_logger
 from openharness.ui.coordinator_drain import (
     format_completed_task_notifications,
     pending_async_agent_entries,
@@ -56,14 +57,13 @@ SOCIAL_OUTPUT_INSTRUCTIONS = (
     "生成文件必须保存到本消息指定的输出目录。\n"
     "发送文件写：[attachment: path]；图片：[image: path]。\n"
     "音频语音：[voice: path]；音频文件：[audio-file: path]。\n"
-    "能执行就直接执行，确实缺少必要信息时才简短询问"
     # "如果已读取某个 skill，请按该 skill 的 Usage 运行脚本或命令，不要用图像描述/生成工具替代确定性的本地文件处理。\n"
     # "只有确认文件真实存在后才能写发送标记。\n"
-    # "不要自我介绍，不要复述这些系统规则；能执行就直接执行，确实缺少必要信息时才简短询问。"
+    "不要自我介绍，不要复述这些系统规则；能执行就直接执行，确实缺少必要信息时才简短询问。"
 )
 FILE_EXPECTATION_INSTRUCTIONS = (
     "\n\n[文件期待标记]\n"
-    "回复末尾可加：[期待文件] / [期待文件:描述] / [无需文件]（可选，系统会自动移除）。"
+    "回复末尾可加：[期待文件] / [期待文件:描述] / [无需文件]"
 )
 
 
@@ -136,6 +136,21 @@ class WebConfigSmartChannelBridge:
                 logger.exception("WebConfigSmartChannelBridge: unhandled error")
 
     async def _handle(self, msg: InboundMessage) -> None:
+        conv_logger = init_conversation_logger(
+            source=ConversationSource.BOT,
+            session_id=self._conversation_session_id(msg),
+        )
+        conv_logger.log_metadata(
+            "inbound_message",
+            {
+                "channel": msg.channel,
+                "chat_id": msg.chat_id,
+                "sender_id": msg.sender_id,
+                "session_key": msg.session_key,
+                "content": msg.content,
+                "media": list(msg.media or []),
+            },
+        )
         key = self._state_key(msg)
         state = self._states.setdefault(key, self._new_state())
 
@@ -595,6 +610,12 @@ class WebConfigSmartChannelBridge:
                     outbound_text = "任务没有返回可发送的内容。请稍后重试，或补充更明确的处理要求。"
 
         self._append_assistant_session_message(msg, reply_text or outbound_text, agent_id)
+        self._log_outbound_conversation_message(
+            msg,
+            content=reply_text or outbound_text,
+            media=outbound_media,
+            event="assistant_reply",
+        )
 
         # 记录 LLM 生成的输出文件到时间线
         if state is not None:
@@ -688,6 +709,12 @@ class WebConfigSmartChannelBridge:
 
     async def _publish_notice(self, msg: InboundMessage, text: str) -> None:
         self._append_assistant_session_message(msg, text, None)
+        self._log_outbound_conversation_message(
+            msg,
+            content=text,
+            media=[],
+            event="assistant_notice",
+        )
         await self._publish_reply(msg, text)
 
     def _normalize_inbound_media_paths(self, msg: InboundMessage, media: list[str]) -> list[str]:
@@ -1245,6 +1272,36 @@ class WebConfigSmartChannelBridge:
     @staticmethod
     def _state_key(msg: InboundMessage) -> str:
         return f"{msg.channel}:{msg.session_key_override or msg.sender_id}"
+
+    @staticmethod
+    def _conversation_session_id(msg: InboundMessage) -> str:
+        raw = f"{msg.channel}_{msg.session_key_override or msg.sender_id or msg.chat_id}"
+        return re.sub(r"[^A-Za-z0-9_.-]+", "_", raw)[:120] or "bot"
+
+    def _log_outbound_conversation_message(
+        self,
+        msg: InboundMessage,
+        *,
+        content: str,
+        media: list[str] | None,
+        event: str,
+    ) -> None:
+        conv_logger = init_conversation_logger(
+            source=ConversationSource.BOT,
+            session_id=self._conversation_session_id(msg),
+        )
+        conv_logger.log_metadata(
+            "outbound_message",
+            {
+                "event": event,
+                "channel": msg.channel,
+                "chat_id": msg.chat_id,
+                "sender_id": msg.sender_id,
+                "session_key": msg.session_key,
+                "content": content,
+                "media": list(media or []),
+            },
+        )
 
     @staticmethod
     def _message_id(msg: InboundMessage) -> str | None:

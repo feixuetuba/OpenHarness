@@ -598,6 +598,14 @@
             </div>
             <div class="form-section">
               <div class="form-item">
+                <label class="form-label">供应商模板</label>
+                <select id="newProfilePreset" class="form-input" onchange="applyProviderPreset()">
+                  <option value="">自定义</option>
+                </select>
+              </div>
+            </div>
+            <div class="form-section">
+              <div class="form-item">
                 <label class="form-label">Profile 名称</label>
                 <input type="text" id="newProfileName" class="form-input" placeholder="例如: my-custom-provider">
               </div>
@@ -615,6 +623,15 @@
                   <option value="openai">OpenAI</option>
                   <option value="anthropic">Anthropic</option>
                   <option value="openrouter">OpenRouter</option>
+                  <option value="anthropic_claude">Claude Subscription</option>
+                  <option value="openai_codex">Codex Subscription</option>
+                  <option value="copilot">GitHub Copilot</option>
+                  <option value="moonshot">Moonshot</option>
+                  <option value="gemini">Gemini</option>
+                  <option value="minimax">MiniMax</option>
+                  <option value="nvidia">NVIDIA</option>
+                  <option value="dashscope">DashScope</option>
+                  <option value="modelscope">ModelScope</option>
                 </select>
               </div>
             </div>
@@ -624,13 +641,15 @@
                 <select id="newProfileApiFormat" class="form-input">
                   <option value="openai">OpenAI Compatible</option>
                   <option value="anthropic">Anthropic</option>
+                  <option value="copilot">Copilot</option>
                 </select>
               </div>
             </div>
             <div class="form-section">
               <div class="form-item">
-                <label class="form-label">默认模型</label>
+                <label class="form-label">供应商默认模型</label>
                 <input type="text" id="newProfileModel" class="form-input" placeholder="例如: gpt-4">
+                <p class="text-xs text-text-muted mt-2">仅作为默认值；每个 Agent 仍可从该供应商的可用模型中单独选择。</p>
               </div>
             </div>
             <div class="form-section">
@@ -651,14 +670,15 @@
                 <svg class="w-4 h-4 text-accent-green" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
               </div>
               <div>
-                <h3 class="text-base font-semibold text-text-primary">当前 Profile 设置</h3>
-                <p class="text-xs text-text-muted">调整活跃配置参数</p>
+                <h3 id="profileSettingsTitle" class="text-base font-semibold text-text-primary">供应商连接设置</h3>
+                <p id="profileSettingsHint" class="text-xs text-text-muted">选择一个供应商后编辑 Base URL 等连接参数</p>
               </div>
             </div>
             <div class="form-section">
               <div class="form-item">
-                <label class="form-label">最后使用模型</label>
-                <input type="text" id="profileLastModel" class="form-input" placeholder="模型名称">
+                <label class="form-label">供应商默认模型</label>
+                <input type="text" id="profileDefaultModel" class="form-input" placeholder="例如: gpt-4">
+                <p class="text-xs text-text-muted mt-2">这是这个供应商的默认模型；配置 Agent 时可以重新选择其他可用模型。</p>
               </div>
             </div>
             <div class="form-section">
@@ -686,6 +706,7 @@
               <div class="form-item">
                 <label class="form-label">API Key</label>
                 <input type="password" id="apiKeyInput" class="form-input" placeholder="sk-...">
+                <p id="apiKeyHint" class="text-xs text-text-muted mt-2">选择一个供应商后配置认证密钥</p>
               </div>
             </div>
             <div class="flex flex-wrap gap-2 items-center pt-4 border-t border-dark-border">
@@ -785,8 +806,23 @@
             </div>
             <div class="form-section">
               <div class="form-item">
-                <label class="form-label">模型覆盖（可选）</label>
-                <input type="text" id="newAgentModel" class="form-input" placeholder="留空则使用默认模型">
+                <label class="form-label">供应商 / Profile</label>
+                <select id="newAgentProfile" class="form-input" onchange="updateAgentModelChoices()">
+                  <option value="">使用当前默认供应商</option>
+                </select>
+              </div>
+            </div>
+            <div class="form-section">
+              <div class="form-item">
+                <label class="form-label">模型</label>
+                <div class="flex flex-wrap gap-2">
+                  <select id="newAgentModelSelect" class="form-input flex-1 min-w-[220px]" onchange="syncAgentModelFromSelect()">
+                    <option value="">使用所选供应商默认模型</option>
+                  </select>
+                  <button type="button" onclick="refreshAgentModelList()" class="btn-secondary text-xs px-3 py-1.5">刷新模型列表</button>
+                </div>
+                <input type="text" id="newAgentModel" class="form-input mt-2" placeholder="也可以手动输入模型名称">
+                <p id="agentModelHint" class="text-xs text-text-muted mt-2">先选择供应商，再选择或输入模型。</p>
               </div>
             </div>
             <div class="form-section">
@@ -1198,6 +1234,9 @@
     let editingAgentId = null;
     let agents = [];
     let activeAgentId = null;
+    let providerPresets = [];
+    let profileMap = {};
+    let profileList = [];
 
     // Navigation
     function switchPrimaryNav(nav) {
@@ -1275,12 +1314,10 @@
     }
 
     // Data Loading
-    async function loadSettings() {
+    async function loadSettings(preferredProfileName = '') {
       try {
         const res = await fetch('/api/settings');
         const data = await res.json();
-        activeProfileName = data.active_profile;
-
         // Load agents
         agents = data.agents || [];
         activeAgentId = data.active_agent_id;
@@ -1288,17 +1325,22 @@
         document.getElementById('agentName').textContent = activeAgent?.name || data.active_profile || 'Default Agent';
 
         // Load current profile settings
+        profileList = data.profiles || [];
+        profileMap = Object.fromEntries(profileList.map(p => [p.name, p]));
         if (data.profiles && data.profiles.length > 0) {
+          const preferredProfile = preferredProfileName ? profileMap[preferredProfileName] : null;
           const activeProfile = data.profiles.find(p => p.active);
-          if (activeProfile) {
-            document.getElementById('profileLastModel').value = activeProfile.last_model || '';
-            document.getElementById('profileBaseUrl').value = activeProfile.base_url || '';
-          }
+          const selectedProfile = preferredProfile || activeProfile || data.profiles[0];
+          selectProfileForEdit(selectedProfile);
+        } else {
+          clearProfileEditor();
         }
 
         document.getElementById('memoryEnabled').value = data.memory_enabled.toString();
         document.getElementById('memoryMaxFiles').value = data.memory_max_files;
         renderProfiles(data.profiles);
+        renderAgentProfileOptions();
+        await loadProviderPresets();
         updateStatus(data);
       } catch (e) {
         console.error('Failed to load settings:', e);
@@ -1308,7 +1350,7 @@
     function renderProfiles(profiles) {
       const container = document.getElementById('profileList');
       if (!profiles || profiles.length === 0) {
-        container.innerHTML = '<div class="text-sm text-text-muted">暂无 Profile</div>';
+        container.innerHTML = '<div class="text-sm text-text-muted">暂无已配置 Profile。点击“添加 Profile”配置新的供应商。</div>';
         return;
       }
       container.innerHTML = profiles.map(p => `
@@ -1318,14 +1360,74 @@
             <span class="text-xs text-text-muted ml-2">${p.label || ''}</span>
           </div>
           <span class="text-xs px-2.5 py-1 bg-dark-border/50 rounded-md text-text-muted">${p.provider}</span>
+          ${p.configured ? '<span class="text-xs text-accent-green">已配置</span>' : '<span class="text-xs text-accent-amber">待配置</span>'}
           ${p.active ? '<span class="text-xs text-accent-green font-medium flex items-center gap-1"><span class="w-1.5 h-1.5 rounded-full bg-accent-green"></span>当前</span>' : ''}
           <div class="flex flex-wrap gap-2 items-center ml-auto">
             ${!p.active ? `<button onclick="useProfile('${p.name}')" class="btn-secondary text-xs px-2.5 py-1.5">使用</button>` : ''}
-            <button onclick="editProfile('${p.name}', '${p.auth_source || p.name}')" class="btn-secondary text-xs px-2.5 py-1.5">编辑</button>
-            <button onclick="deleteProfile('${p.name}')" class="btn-danger text-xs px-2.5 py-1.5">删除</button>
+            <button onclick='editProfile(${JSON.stringify(p.name)})' class="btn-secondary text-xs px-2.5 py-1.5">编辑</button>
+            ${!p.builtin ? `<button onclick="deleteProfile('${p.name}')" class="btn-danger text-xs px-2.5 py-1.5">删除</button>` : ''}
           </div>
         </div>
       `).join('');
+    }
+
+    function setProfileControlsEnabled(enabled) {
+      ['profileDefaultModel', 'profileBaseUrl'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.disabled = !enabled;
+      });
+      const keyInput = document.getElementById('apiKeyInput');
+      if (keyInput) keyInput.disabled = !enabled || keyInput.dataset.keyEditable === 'false';
+      document.querySelectorAll('#viewProviders button').forEach(btn => {
+        const action = btn.getAttribute('onclick') || '';
+        if (action.includes('saveProfileSettings') || action.includes('saveApiKey') || action.includes('testConnection')) {
+          const keyOnly = action.includes('saveApiKey') || action.includes('testConnection');
+          const disabled = !enabled || (keyOnly && keyInput?.dataset.keyEditable === 'false');
+          btn.disabled = disabled;
+          btn.classList.toggle('opacity-50', disabled);
+          btn.classList.toggle('cursor-not-allowed', disabled);
+        }
+      });
+    }
+
+    function clearProfileEditor() {
+      activeProfileName = '';
+      currentAuthSource = '';
+      document.getElementById('profileSettingsTitle').textContent = 'Profile 设置';
+      document.getElementById('profileSettingsHint').textContent = '选择一个供应商后编辑配置参数';
+      document.getElementById('profileDefaultModel').value = '';
+      document.getElementById('profileBaseUrl').value = '';
+      const keyInput = document.getElementById('apiKeyInput');
+      keyInput.value = '';
+      keyInput.placeholder = 'sk-...';
+      keyInput.dataset.keyEditable = 'true';
+      document.getElementById('apiKeyHint').textContent = '选择一个供应商后配置认证密钥';
+      setProfileControlsEnabled(false);
+    }
+
+    function selectProfileForEdit(profile) {
+      if (!profile) {
+        clearProfileEditor();
+        return;
+      }
+      activeProfileName = profile.name || '';
+      currentAuthSource = profile.auth_source || profile.name || '';
+      const displayName = profile.label ? `${profile.name} · ${profile.label}` : profile.name;
+      document.getElementById('profileSettingsTitle').textContent = displayName || 'Profile 设置';
+      document.getElementById('profileSettingsHint').textContent = profile.active ? '当前正在使用的 Profile' : '正在编辑此 Profile，保存后不会自动切换为当前使用';
+      document.getElementById('profileDefaultModel').value = profile.default_model || '';
+      document.getElementById('profileBaseUrl').value = profile.base_url || '';
+      const keyInput = document.getElementById('apiKeyInput');
+      const usesApiKey = (currentAuthSource || '').endsWith('_api_key');
+      keyInput.value = '';
+      keyInput.dataset.keyEditable = usesApiKey ? 'true' : 'false';
+      keyInput.placeholder = usesApiKey
+        ? (profile.credential_configured ? '已配置，输入新 Key 可覆盖' : '未配置，请输入 API Key')
+        : '此认证方式不使用 API Key';
+      document.getElementById('apiKeyHint').textContent = usesApiKey
+        ? `${currentAuthSource}${profile.credential_configured ? ' 已配置' : ' 未配置'}`
+        : `${currentAuthSource || '当前认证方式'} 不需要在这里配置 API Key`;
+      setProfileControlsEnabled(true);
     }
 
     function updateStatus(data) {
@@ -1336,6 +1438,34 @@
         document.getElementById('statusText').parentElement.classList.add('text-accent-green');
         document.getElementById('statusText').parentElement.classList.remove('text-text-secondary');
       }
+    }
+
+    async function loadProviderPresets() {
+      try {
+        const res = await fetch('/api/providers');
+        providerPresets = await res.json();
+        const select = document.getElementById('newProfilePreset');
+        if (!select) return;
+        const current = select.value;
+        select.innerHTML = '<option value="">自定义</option>' + providerPresets.map(p => `
+          <option value="${p.name}">${p.label || p.name}</option>
+        `).join('');
+        select.value = current;
+      } catch (e) {
+        console.error('Failed to load provider presets:', e);
+      }
+    }
+
+    function applyProviderPreset() {
+      const presetName = document.getElementById('newProfilePreset').value;
+      const preset = providerPresets.find(p => p.name === presetName);
+      if (!preset) return;
+      document.getElementById('newProfileName').value = preset.name || '';
+      document.getElementById('newProfileLabel').value = preset.label || preset.name || '';
+      document.getElementById('newProfileProvider').value = preset.provider || 'openai';
+      document.getElementById('newProfileApiFormat').value = preset.api_format || 'openai';
+      document.getElementById('newProfileModel').value = preset.default_model || '';
+      document.getElementById('newProfileBaseUrl').value = preset.base_url || '';
     }
 
     // Profile Actions
@@ -1355,6 +1485,7 @@
 
     function showAddProfileForm() {
       document.getElementById('addProfileForm').classList.remove('hidden');
+      loadProviderPresets();
     }
 
     function hideAddProfileForm() {
@@ -1362,11 +1493,15 @@
     }
 
     async function addProfile() {
+      const presetName = document.getElementById('newProfilePreset').value;
+      const preset = providerPresets.find(p => p.name === presetName) || {};
       const data = {
         name: document.getElementById('newProfileName').value,
         label: document.getElementById('newProfileLabel').value,
         provider: document.getElementById('newProfileProvider').value,
         api_format: document.getElementById('newProfileApiFormat').value,
+        auth_source: preset.auth_source || `${document.getElementById('newProfileProvider').value}_api_key`,
+        credential_slot: document.getElementById('newProfileName').value,
         default_model: document.getElementById('newProfileModel').value,
         base_url: document.getElementById('newProfileBaseUrl').value,
       };
@@ -1378,7 +1513,8 @@
         });
         if (res.ok) {
           hideAddProfileForm();
-          await loadSettings();
+          const result = await res.json();
+          await loadSettings(result.profile || data.name);
         } else {
           const err = await res.json();
           alert('添加失败: ' + err.detail);
@@ -1392,31 +1528,33 @@
       if (!confirm(`确定删除 Profile "${name}"?`)) return;
       try {
         await fetch(`/api/profile/${name}`, { method: 'DELETE' });
-        await loadSettings();
+        await loadSettings(name);
       } catch (e) {
         alert('删除失败: ' + e.message);
       }
     }
 
-    function editProfile(name, authSource) {
-      activeProfileName = name;
-      currentAuthSource = authSource || name;
-      document.getElementById('profileLastModel').value = '';
-      document.getElementById('profileBaseUrl').value = '';
+    function editProfile(name) {
+      selectProfileForEdit(profileMap[name]);
     }
 
     async function saveProfileSettings() {
+      if (!activeProfileName) {
+        alert('请先添加或选择一个已配置 Profile');
+        return;
+      }
       const data = {
-        last_model: document.getElementById('profileLastModel').value,
+        default_model: document.getElementById('profileDefaultModel').value,
         base_url: document.getElementById('profileBaseUrl').value,
       };
       try {
-        await fetch(`/api/profile/${activeProfileName}`, {
+        const editingName = activeProfileName;
+        await fetch(`/api/profile/${editingName}`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(data)
         });
-        await loadSettings();
+        await loadSettings(editingName);
       } catch (e) {
         alert('保存失败: ' + e.message);
       }
@@ -1424,23 +1562,39 @@
 
     async function saveApiKey() {
       const key = document.getElementById('apiKeyInput').value;
+      if (document.getElementById('apiKeyInput').dataset.keyEditable === 'false') {
+        alert('当前 Profile 不使用 API Key 认证');
+        return;
+      }
       if (!key || !currentAuthSource) {
-        alert('请先选择一个 Profile');
+        alert('请先添加或选择一个已配置 Profile');
         return;
       }
       try {
-        await fetch(`/api/auth/${currentAuthSource}/set-key`, {
+        const editingName = activeProfileName;
+        const res = await fetch(`/api/profile/${editingName}/set-key`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ api_key: key })
         });
+        if (!res.ok) {
+          const err = await res.json();
+          alert('保存失败: ' + (err.detail || `HTTP ${res.status}`));
+          return;
+        }
         alert('API Key 已保存');
+        document.getElementById('apiKeyInput').value = '';
+        await loadSettings(editingName);
       } catch (e) {
         alert('保存失败: ' + e.message);
       }
     }
 
     async function testConnection() {
+      if (!activeProfileName) {
+        alert('请先添加或选择一个已配置 Profile');
+        return;
+      }
       const baseUrl = document.getElementById('profileBaseUrl').value;
       const apiKey = document.getElementById('apiKeyInput').value;
       if (!baseUrl) {
@@ -1458,7 +1612,8 @@
           body: JSON.stringify({
             base_url: baseUrl,
             api_format: 'openai',
-            api_key: apiKey || undefined
+            api_key: apiKey || undefined,
+            profile_name: activeProfileName
           })
         });
         const data = await res.json();
@@ -1498,9 +1653,9 @@
         alert('请选择一个模型');
         return;
       }
-      document.getElementById('profileLastModel').value = model;
+      document.getElementById('profileDefaultModel').value = model;
       const resultDiv = document.getElementById('testResult');
-      resultDiv.innerHTML = `<div class="text-accent-green">已选择: ${model}</div>`;
+      resultDiv.innerHTML = `<div class="text-accent-green">已设为供应商默认模型: ${model}</div>`;
     }
 
     // Agent Management
@@ -1527,15 +1682,109 @@
           <div class="flex-1 min-w-[120px]">
             <span class="text-sm font-medium ${a.id === activeAgentId ? 'text-accent-green' : 'text-text-primary'}">${a.name}</span>
             <span class="text-xs text-text-muted ml-2">(${a.id})</span>
+            <div class="text-xs text-text-muted mt-1">${a.profile ? `供应商: ${a.profile}` : '供应商: 当前默认'}${a.model ? ` · 模型: ${a.model}` : ''}</div>
           </div>
           ${a.id === activeAgentId ? '<span class="text-xs text-accent-green font-medium flex items-center gap-1"><span class="w-1.5 h-1.5 rounded-full bg-accent-green"></span>当前</span>' : ''}
           <div class="flex flex-wrap gap-2 items-center ml-auto">
-            ${a.id !== activeAgentId ? `<button onclick="activateAgent('${a.id}')" class="btn-secondary text-xs px-2.5 py-1.5">使用</button>` : ''}
-            <button onclick="editAgent('${a.id}')" class="btn-secondary text-xs px-2.5 py-1.5">编辑</button>
-            <button onclick="deleteAgent('${a.id}')" class="btn-danger text-xs px-2.5 py-1.5">删除</button>
+            ${a.id !== activeAgentId ? `<button onclick='activateAgent(${JSON.stringify(a.id)})' class="btn-secondary text-xs px-2.5 py-1.5">使用</button>` : ''}
+            <button onclick='editAgent(${JSON.stringify(a.id)})' class="btn-secondary text-xs px-2.5 py-1.5">编辑</button>
+            <button onclick='deleteAgent(${JSON.stringify(a.id)})' class="btn-danger text-xs px-2.5 py-1.5">删除</button>
           </div>
         </div>
       `).join('');
+    }
+
+    function renderAgentProfileOptions(selected = '') {
+      const select = document.getElementById('newAgentProfile');
+      if (!select) return;
+      const current = selected || select.value || '';
+      select.innerHTML = '<option value="">使用当前默认供应商</option>' + profileList.map(p => `
+        <option value="${p.name}">${p.name}${p.label ? ` · ${p.label}` : ''}${p.configured ? '' : '（未配置 Key）'}</option>
+      `).join('');
+      select.value = profileMap[current] ? current : '';
+      updateAgentModelChoices();
+    }
+
+    function getSelectedAgentProfile() {
+      const profileName = document.getElementById('newAgentProfile')?.value || '';
+      return profileName ? profileMap[profileName] : null;
+    }
+
+    function setAgentModelOptions(models, selected = '') {
+      const select = document.getElementById('newAgentModelSelect');
+      if (!select) return;
+      const unique = [...new Set((models || []).filter(Boolean))];
+      select.innerHTML = '<option value="">使用所选供应商默认模型</option>' + unique.map(model => `
+        <option value="${model}">${model}</option>
+      `).join('');
+      if (selected && !unique.includes(selected)) {
+        select.innerHTML += `<option value="${selected}">${selected}</option>`;
+      }
+      select.value = selected || '';
+    }
+
+    async function updateAgentModelChoices(selected = '') {
+      const profile = getSelectedAgentProfile();
+      const models = [];
+      if (profile) {
+        if (Array.isArray(profile.allowed_models)) models.push(...profile.allowed_models);
+        if (profile.last_model) models.push(profile.last_model);
+        if (profile.default_model) models.push(profile.default_model);
+      }
+      setAgentModelOptions(models, selected || document.getElementById('newAgentModel')?.value || '');
+      const hint = document.getElementById('agentModelHint');
+      if (hint) {
+        hint.textContent = profile
+          ? `当前供应商: ${profile.name}${profile.base_url ? ` · ${profile.base_url}` : ''}`
+          : '不指定供应商时，Agent 会使用系统当前默认供应商和默认模型。';
+      }
+      if (profile) {
+        await refreshAgentModelList({ silent: true, selected });
+      }
+    }
+
+    function syncAgentModelFromSelect() {
+      document.getElementById('newAgentModel').value = document.getElementById('newAgentModelSelect').value || '';
+    }
+
+    async function refreshAgentModelList(options = {}) {
+      const silent = Boolean(options.silent);
+      const selected = options.selected || document.getElementById('newAgentModel').value.trim();
+      const profile = getSelectedAgentProfile();
+      if (!profile) {
+        if (!silent) alert('请先选择一个供应商/Profile');
+        return;
+      }
+      if (!profile.base_url) {
+        if (!silent) alert('该 Profile 没有 Base URL，无法拉取模型列表');
+        return;
+      }
+      const hint = document.getElementById('agentModelHint');
+      if (hint) hint.textContent = '正在获取模型列表...';
+      try {
+        const res = await fetch('/api/test-connection', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            base_url: profile.base_url,
+            api_format: profile.api_format || 'openai',
+            profile_name: profile.name
+          })
+        });
+        const data = await res.json();
+        if (!data.success) {
+          if (hint) hint.textContent = `获取失败: ${data.message || '未知错误'}`;
+          return;
+        }
+        const fetchedModels = data.models || [];
+        if (!fetchedModels.includes(profile.default_model) && profile.default_model) {
+          fetchedModels.unshift(profile.default_model);
+        }
+        setAgentModelOptions(fetchedModels, selected);
+        if (hint) hint.textContent = `已获取 ${data.models?.length || 0} 个模型`;
+      } catch (e) {
+        if (hint) hint.textContent = `获取失败: ${e.message}`;
+      }
     }
 
     function showAddAgentForm() {
@@ -1544,7 +1793,9 @@
       document.getElementById('newAgentId').value = '';
       document.getElementById('newAgentName').value = '';
       document.getElementById('newAgentSystemPrompt').value = '';
+      renderAgentProfileOptions('');
       document.getElementById('newAgentModel').value = '';
+      updateAgentModelChoices('');
       document.getElementById('newAgentMaxTurns').value = '';
       document.getElementById('newAgentId').disabled = false;
       document.getElementById('addAgentForm').classList.remove('hidden');
@@ -1565,7 +1816,9 @@
       document.getElementById('newAgentId').disabled = true;
       document.getElementById('newAgentName').value = agent.name || '';
       document.getElementById('newAgentSystemPrompt').value = agent.system_prompt || '';
+      renderAgentProfileOptions(agent.profile || '');
       document.getElementById('newAgentModel').value = agent.model || '';
+      updateAgentModelChoices(agent.model || '');
       document.getElementById('newAgentMaxTurns').value = agent.max_turns || '';
       document.getElementById('addAgentForm').classList.remove('hidden');
     }
@@ -1574,6 +1827,7 @@
       const id = document.getElementById('newAgentId').value.trim();
       const name = document.getElementById('newAgentName').value.trim();
       const systemPrompt = document.getElementById('newAgentSystemPrompt').value;
+      const profile = document.getElementById('newAgentProfile').value || null;
       const model = document.getElementById('newAgentModel').value.trim() || null;
       const maxTurns = document.getElementById('newAgentMaxTurns').value ? parseInt(document.getElementById('newAgentMaxTurns').value) : null;
 
@@ -1586,6 +1840,7 @@
         id,
         name,
         system_prompt: systemPrompt,
+        profile,
         model,
         max_turns: maxTurns,
       };

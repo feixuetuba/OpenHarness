@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 import uuid
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Callable, Protocol
@@ -25,6 +26,7 @@ from openharness.auth.external import (
 )
 from openharness.api.usage import UsageSnapshot
 from openharness.engine.messages import ConversationMessage, assistant_message_from_api
+from openharness.utils.conversation_log import get_or_init_conversation_logger
 
 log = logging.getLogger(__name__)
 
@@ -202,6 +204,8 @@ class AnthropicApiClient:
 
     async def _stream_once(self, request: ApiMessageRequest) -> AsyncIterator[ApiStreamEvent]:
         """Single attempt at streaming a message."""
+        conv_logger = get_or_init_conversation_logger()
+        request_start_time = time.monotonic() if conv_logger else None
         params: dict[str, Any] = {
             "model": request.model,
             "messages": [message.to_api_param() for message in request.messages],
@@ -218,6 +222,18 @@ class AnthropicApiClient:
             )
         if request.tools:
             params["tools"] = request.tools
+        if conv_logger:
+            conv_logger.log_request(
+                model=request.model,
+                messages=params["messages"],
+                system_prompt=params.get("system"),
+                tools=[
+                    str(tool.get("name"))
+                    for tool in request.tools
+                    if isinstance(tool, dict) and tool.get("name")
+                ],
+                max_tokens=request.max_tokens,
+            )
         if self._claude_oauth:
             params["betas"] = claude_oauth_betas()
             params["metadata"] = {
@@ -252,8 +268,27 @@ class AnthropicApiClient:
             raise _translate_api_error(exc) from exc
 
         usage = getattr(final_message, "usage", None)
+        message = assistant_message_from_api(final_message)
+        if conv_logger:
+            conv_logger.log_response(
+                model=request.model,
+                content=message.text,
+                reasoning=getattr(final_message, "thinking", None),
+                tool_calls=[
+                    {"name": tool_use.name, "id": tool_use.id, "input": tool_use.input}
+                    for tool_use in message.tool_uses
+                ] or None,
+                input_tokens=int(getattr(usage, "input_tokens", 0) or 0),
+                output_tokens=int(getattr(usage, "output_tokens", 0) or 0),
+                finish_reason=getattr(final_message, "stop_reason", None),
+                duration_ms=(
+                    (time.monotonic() - request_start_time) * 1000
+                    if request_start_time is not None
+                    else None
+                ),
+            )
         yield ApiMessageCompleteEvent(
-            message=assistant_message_from_api(final_message),
+            message=message,
             usage=UsageSnapshot(
                 input_tokens=int(getattr(usage, "input_tokens", 0) or 0),
                 output_tokens=int(getattr(usage, "output_tokens", 0) or 0),

@@ -32,6 +32,17 @@ def _write_plugin(root: Path) -> None:
         encoding="utf-8",
     )
     (deploy_dir / "SKILL.md").write_text(
+        "---\n"
+        "name: Deploy\n"
+        "keywords:\n"
+        "  - rollout\n"
+        "trigger: Use for plugin deployment workflows.\n"
+        "negative-trigger: Do not use for local unit tests.\n"
+        "requires:\n"
+        "  - deployment_target\n"
+        "bm25-search-keywords:\n"
+        "  - release\n"
+        "---\n\n"
         "# Deploy\nDeploy with care\n",
         encoding="utf-8",
     )
@@ -117,6 +128,11 @@ def test_load_plugins_from_project_dir(tmp_path: Path, monkeypatch):
     plugin = plugins[0]
     assert plugin.manifest.name == "example"
     assert plugin.skills[0].name == "Deploy"
+    assert plugin.skills[0].keywords == ("rollout",)
+    assert plugin.skills[0].trigger == "Use for plugin deployment workflows."
+    assert plugin.skills[0].negative_trigger == "Do not use for local unit tests."
+    assert plugin.skills[0].requires == ("deployment_target",)
+    assert plugin.skills[0].bm25_search_keywords == ("release",)
     assert {command.name for command in plugin.commands} == {"example:ops:restart"}
     assert {agent.name for agent in plugin.agents} == {"example:review:reviewer"}
     assert "session_start" in plugin.hooks

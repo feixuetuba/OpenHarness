@@ -330,8 +330,29 @@ class OpenAICompatibleClient:
 
     async def _stream_once(self, request: ApiMessageRequest) -> AsyncIterator[ApiStreamEvent]:
         """Single attempt: stream an OpenAI chat completion."""
+        from openharness.utils.conversation_log import get_or_init_conversation_logger
+
+        conv_logger = get_or_init_conversation_logger()
+        request_start_time = None
+
         openai_messages = _convert_messages_to_openai(request.messages, request.system_prompt)
         openai_tools = _convert_tools_to_openai(request.tools) if request.tools else None
+
+        # Log the request
+        if conv_logger:
+            import time
+            request_start_time = time.monotonic()
+            tool_names = [
+                str(tool.get("name") if isinstance(tool, dict) else getattr(tool, "name", ""))
+                for tool in request.tools
+            ] if request.tools else None
+            conv_logger.log_request(
+                model=request.model,
+                messages=openai_messages,
+                system_prompt=request.system_prompt,
+                tools=tool_names,
+                max_tokens=request.max_tokens,
+            )
 
         params: dict[str, Any] = {
             "model": request.model,
@@ -439,6 +460,32 @@ class OpenAICompatibleClient:
         # can replay it when the message is sent back to the API
         if collected_reasoning:
             final_message._reasoning = collected_reasoning  # type: ignore[attr-defined]
+
+        # Log the response
+        if conv_logger:
+            import time
+            duration_ms = (time.monotonic() - request_start_time) * 1000 if request_start_time else None
+            tool_call_summary = None
+            if collected_tool_calls:
+                tool_call_summary = [
+                    {
+                        "name": tc["name"],
+                        "id": tc["id"],
+                        "arguments": tc["arguments"],
+                    }
+                    for tc in collected_tool_calls.values()
+                    if tc["name"]
+                ]
+            conv_logger.log_response(
+                model=request.model,
+                content=collected_content,
+                reasoning=collected_reasoning,
+                tool_calls=tool_call_summary,
+                input_tokens=usage_data.get("input_tokens", 0),
+                output_tokens=usage_data.get("output_tokens", 0),
+                finish_reason=finish_reason,
+                duration_ms=duration_ms,
+            )
 
         yield ApiMessageCompleteEvent(
             message=final_message,

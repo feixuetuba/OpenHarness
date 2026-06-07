@@ -91,6 +91,15 @@ def test_user_skill_metadata_tracks_command_name_and_frontmatter_flags(tmp_path:
             disable-model-invocation: true
             model: gpt-5.4
             argument-hint: ENV
+            keywords:
+              - deploy
+              - release
+            trigger: Use when preparing release deployment workflows.
+            negative-trigger: Do not use for local-only unit test changes.
+            requires:
+              - deployment_target
+            bm25-search-keywords:
+              - rollout
             ---
 
             # Deploy Flow
@@ -111,6 +120,11 @@ def test_user_skill_metadata_tracks_command_name_and_frontmatter_flags(tmp_path:
     assert by_command.disable_model_invocation is True
     assert by_command.model == "gpt-5.4"
     assert by_command.argument_hint == "ENV"
+    assert by_command.keywords == ("deploy", "release")
+    assert by_command.trigger == "Use when preparing release deployment workflows."
+    assert by_command.negative_trigger == "Do not use for local-only unit test changes."
+    assert by_command.requires == ("deployment_target",)
+    assert by_command.bm25_search_keywords == ("rollout",)
 
 
 def test_project_skills_load_by_default_from_supported_dirs(tmp_path: Path, monkeypatch):
@@ -178,6 +192,34 @@ def test_project_skill_nearer_cwd_overrides_parent_and_user(tmp_path: Path, monk
     assert skill is not None
     assert skill.source == "project"
     assert "api version" in skill.content
+
+
+def test_overridden_skill_is_not_left_reachable_by_old_alias(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
+    _write_skill(
+        tmp_path / "home" / ".claude" / "skills",
+        "deploy",
+        textwrap.dedent("""\
+            ---
+            aliases:
+              - old-deploy
+            ---
+
+            # deploy
+            user version
+            """),
+    )
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / ".git").mkdir()
+    _write_skill(repo / ".claude" / "skills", "deploy", "# deploy\nproject version\n")
+
+    registry = load_skill_registry(repo, settings=Settings())
+
+    assert registry.get("deploy") is not None
+    assert "project version" in registry.get("deploy").content  # type: ignore[union-attr]
+    assert registry.get("old-deploy") is None
 
 
 def test_unsafe_project_skill_dirs_are_ignored(tmp_path: Path, monkeypatch):

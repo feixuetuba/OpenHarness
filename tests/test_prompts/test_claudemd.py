@@ -58,6 +58,50 @@ def test_build_runtime_system_prompt_combines_sections(tmp_path: Path, monkeypat
     assert "Memory" in prompt
 
 
+def test_build_runtime_system_prompt_uses_recalled_skill_candidates(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("OPENHARNESS_DATA_DIR", str(tmp_path / "data"))
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    skills_dir = tmp_path / "config" / "skills"
+    chart_dir = skills_dir / "chart"
+    deploy_dir = skills_dir / "deploy"
+    chart_dir.mkdir(parents=True)
+    deploy_dir.mkdir()
+    (chart_dir / "SKILL.md").write_text(
+        "---\n"
+        "description: Chart fallback description.\n"
+        "keywords:\n"
+        "  - chart\n"
+        "trigger: Use for structured data charts.\n"
+        "negative-trigger: Do not use for artistic image generation.\n"
+        "---\n\n"
+        "# Chart\n",
+        encoding="utf-8",
+    )
+    (deploy_dir / "SKILL.md").write_text(
+        "---\n"
+        "description: Deploy production services.\n"
+        "keywords:\n"
+        "  - deploy\n"
+        "---\n\n"
+        "# Deploy\n",
+        encoding="utf-8",
+    )
+
+    prompt = build_runtime_system_prompt(
+        Settings(),
+        cwd=repo,
+        latest_user_prompt="make a chart from this csv",
+    )
+
+    assert "Available Skill Candidates" in prompt
+    assert "**chart**" in prompt
+    assert "Use for structured data charts." in prompt
+    assert "Do not use when: Do not use for artistic image generation." in prompt
+    assert "**deploy**" not in prompt
+
+
 def test_build_runtime_system_prompt_includes_plan_mode_guidance(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("OPENHARNESS_DATA_DIR", str(tmp_path / "data"))
     repo = tmp_path / "repo"

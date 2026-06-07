@@ -519,13 +519,11 @@ def _install_shutdown_signal_handlers(
 
 def _run_daemon() -> None:
     """Entry point for the scheduler subprocess."""
+    from openharness.utils.logging import setup_logging
+
     log_file = get_logs_dir() / "cron_scheduler.log"
     log_file.parent.mkdir(parents=True, exist_ok=True)
-    logging.basicConfig(
-        filename=str(log_file),
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(message)s",
-    )
+    setup_logging(level=logging.INFO, log_file=str(log_file))
     asyncio.run(run_scheduler_loop())
 
 

@@ -501,17 +501,20 @@ def _profile_from_flat_settings(settings: "Settings") -> tuple[str, ProviderProf
 class ImageGenerationConfig(BaseModel):
     """Configuration for the image_generation tool."""
 
+    enabled: bool = True
     provider: str = "auto"
     model: str = "gpt-image-2"
     api_key: str = ""
     base_url: str = ""
     codex_model: str = "gpt-5.4"
     codex_base_url: str = ""
+    codex_auth_token: str = ""
 
     @classmethod
     def from_env(cls) -> "ImageGenerationConfig":
         """Load image generation config from environment variables."""
         return cls(
+            enabled=os.environ.get("OPENHARNESS_IMAGE_GENERATION_ENABLED", "true").strip().lower() in {"true", "1", "yes"},
             provider=os.environ.get("OPENHARNESS_IMAGE_GENERATION_PROVIDER", "auto").strip()
             or "auto",
             model=os.environ.get("OPENHARNESS_IMAGE_GENERATION_MODEL", "gpt-image-2").strip()
@@ -521,12 +524,13 @@ class ImageGenerationConfig(BaseModel):
             codex_model=os.environ.get("OPENHARNESS_IMAGE_GENERATION_CODEX_MODEL", "gpt-5.4").strip()
             or "gpt-5.4",
             codex_base_url=os.environ.get("OPENHARNESS_IMAGE_GENERATION_CODEX_BASE_URL", "").strip(),
+            codex_auth_token=os.environ.get("OPENHARNESS_IMAGE_GENERATION_CODEX_AUTH_TOKEN", "").strip(),
         )
 
     @property
     def is_configured(self) -> bool:
         """Return True when either a key provider or Codex provider is selected."""
-        return bool(self.api_key or self.provider in {"auto", "codex"})
+        return bool(self.api_key or self.codex_auth_token or self.provider in {"auto", "codex"})
 
 
 class VisionModelConfig(BaseModel):
