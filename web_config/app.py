@@ -1588,6 +1588,22 @@ async def chat_with_agent(req: AgentChatRequest):
             web_output_dir = (Path.cwd() / ".openharness" / "media" / "web" / "outputs" / session_id).resolve()
             web_output_dir.mkdir(parents=True, exist_ok=True)
             debug_log(f"Web output directory: {web_output_dir}")
+
+            def compress_web_path(path: str | Path) -> str:
+                try:
+                    resolved = Path(path).expanduser().resolve()
+                    relative = resolved.relative_to(web_output_dir)
+                    return "$UWEB" if not str(relative) else f"$UWEB/{relative.as_posix()}"
+                except Exception:
+                    return _compress_path_alias(path)
+
+            def expand_web_path(path: str) -> str:
+                text = path.strip()
+                if text == "$UWEB":
+                    return str(web_output_dir)
+                if text.startswith("$UWEB/"):
+                    return str(web_output_dir / text[len("$UWEB/"):])
+                return _expand_path_alias(text)
             
             attachments = req.attachments or []
             
@@ -1629,7 +1645,7 @@ async def chat_with_agent(req: AgentChatRequest):
                                             abs_path = str(Path(source_path).expanduser().resolve())
                                             if abs_path not in saved_image_paths:
                                                 saved_image_paths.append(abs_path)
-                                                attachment_notes.append(f"[image: {_compress_path_alias(abs_path)}]")
+                                                attachment_notes.append(f"[image: {compress_web_path(abs_path)}]")
                                                 debug_log(f"Restored image path from session: {abs_path}")
                                         continue
                                     media_type = block.get("media_type", "image/jpeg")
@@ -1642,7 +1658,7 @@ async def chat_with_agent(req: AgentChatRequest):
                                     
                                     if data:
                                         import mimetypes as mimetypes_lib
-                                        media_dir = Path.cwd() / ".openharness" / "media" / "web"
+                                        media_dir = web_output_dir / "inputs"
                                         media_dir.mkdir(parents=True, exist_ok=True)
                                         
                                         ext = mimetypes_lib.guess_extension(media_type.split(";")[0].strip()) or ".jpg"
@@ -1661,21 +1677,21 @@ async def chat_with_agent(req: AgentChatRequest):
                                             abs_path = str(target_path.resolve())
                                             if abs_path not in saved_image_paths:
                                                 saved_image_paths.append(abs_path)
-                                                attachment_notes.append(f"[image: {_compress_path_alias(abs_path)}]")
+                                                attachment_notes.append(f"[image: {compress_web_path(abs_path)}]")
                                                 debug_log(f"Restored image from session: {abs_path}, size={target_path.stat().st_size}")
                                         except Exception as e:
                                             debug_log(f"Failed to restore image from session: {e}")
                                 # 处理文本块中的图片路径标记（如 [image: /path/to/image.jpg]）
                                 elif isinstance(block, dict) and block.get("type") == "text":
                                     text = block.get("text", "")
-                                    import re
                                     # 匹配 [image: /path/to/image.jpg] 格式的路径
                                     image_pattern = r'\[image:\s*([^\]]+\.(?:jpg|jpeg|png|webp|gif))\]'
                                     matches = re.findall(image_pattern, text, re.IGNORECASE)
                                     for match in matches:
                                         img_path = match.strip()
-                                        if Path(img_path).exists():
-                                            abs_path = str(Path(img_path).expanduser().resolve())
+                                        expanded_img_path = expand_web_path(img_path)
+                                        if Path(expanded_img_path).exists():
+                                            abs_path = str(Path(expanded_img_path).expanduser().resolve())
                                             if abs_path not in saved_image_paths:
                                                 saved_image_paths.append(abs_path)
                                                 debug_log(f"Found image path in text block: {abs_path}")
@@ -1689,7 +1705,7 @@ async def chat_with_agent(req: AgentChatRequest):
             
             if image_attachments:
                 import mimetypes as mimetypes_lib
-                media_dir = Path.cwd() / ".openharness" / "media" / "web"
+                media_dir = web_output_dir / "inputs"
                 media_dir.mkdir(parents=True, exist_ok=True)
                 debug_log(f"Media directory: {media_dir}")
                 
@@ -1725,7 +1741,7 @@ async def chat_with_agent(req: AgentChatRequest):
                         target_path.write_bytes(base64.b64decode(img_data))
                         abs_path = str(target_path.resolve())
                         saved_image_paths.append(abs_path)
-                        attachment_notes.append(f"[image: {_compress_path_alias(abs_path)}]")
+                        attachment_notes.append(f"[image: {compress_web_path(abs_path)}]")
                         file_size = target_path.stat().st_size
                         debug_log(f"Image saved: {abs_path}, size={file_size} bytes")
                     except Exception as e:
@@ -1779,21 +1795,16 @@ async def chat_with_agent(req: AgentChatRequest):
             except Exception:
                 logger.exception("Failed to load skills for web prompt")
             
-            compact_output_dir = _compress_path_alias(web_output_dir)
-            alias_lines = [
-                f"- ${name} = {path}"
-                for name, path in sorted(_expanded_path_aliases().items())
-                if name in {"USKILL", "UDATA", "UPROJ", "UWEB", "SOCIAL"}
-            ]
-            alias_text = "Path aliases:\n" + "\n".join(alias_lines) + "\n" if alias_lines else ""
+            compact_output_dir = "$UWEB"
             output_instructions = (
                 "\n\nWeb output requirements:\n"
-                f"{alias_text}"
+                "- $UWEB is the writable output directory for this web chat session. "
+                "Do not expand it to an absolute path; the web server resolves it.\n"
                 f"- If you generate any image, document, audio, archive, or other file, save it under: {compact_output_dir}\n"
                 "- To send a generated file to the user, include a standalone marker in the final response, for example:\n"
                 f"  [image: {compact_output_dir}/result.jpg]\n"
                 f"  [attachment: {compact_output_dir}/result.zip]\n"
-                "- Path aliases such as $USKILL are allowed in markers and will be expanded by the web server.\n"
+                "- Path aliases in markers are expanded by the web server.\n"
                 "- Do not say the task is complete or ask the user to view the result unless the file was actually generated and the final response includes its marker.\n"
             )
             prompt_message = prompt_message + output_instructions
@@ -1852,8 +1863,18 @@ async def chat_with_agent(req: AgentChatRequest):
                 ask_user_prompt=lambda _question: asyncio.sleep(0, result=""),
                 edit_approval_prompt=lambda _path, _diff, _added, _removed: asyncio.sleep(0, result="accept"),
             )
+            debug_log("Runtime built successfully")
             bundle.session_id = session_id
             bundle.engine.tool_metadata["session_id"] = session_id
+            bundle.engine.tool_metadata["path_aliases"] = {
+                **_expanded_path_aliases(),
+                "UWEB": str(web_output_dir),
+            }
+            debug_log(
+                "Runtime model/profile: "
+                f"model={bundle.engine.model}, "
+                f"image_generation_configured={bool((bundle.engine.tool_metadata.get('image_generation_config') or {}).get('api_key') or (bundle.engine.tool_metadata.get('image_generation_config') or {}).get('codex_auth_token'))}"
+            )
             
             logger.info(f"[DEBUG] Submitting user message to engine...")
             
@@ -1879,6 +1900,14 @@ async def chat_with_agent(req: AgentChatRequest):
             expects_generated_media = bool(saved_image_paths or image_attachments) or any(
                 keyword in message.lower() for keyword in generated_media_keywords
             )
+
+            def next_generated_image_path(suffix: str = ".png") -> Path:
+                image_path = web_output_dir / f"generated_image{suffix}"
+                counter = 1
+                while image_path.exists():
+                    image_path = web_output_dir / f"generated_image_{counter}{suffix}"
+                    counter += 1
+                return image_path
 
             async def try_direct_image_generation() -> list[str] | None:
                 if not agent or not expects_generated_media:
@@ -1945,11 +1974,7 @@ async def chat_with_agent(req: AgentChatRequest):
                     if not image_bytes:
                         raise RuntimeError("image generation returned no image bytes")
 
-                image_path = web_output_dir / "generated_image.png"
-                counter = 1
-                while image_path.exists():
-                    image_path = web_output_dir / f"generated_image_{counter}.png"
-                    counter += 1
+                image_path = next_generated_image_path()
                 image_path.write_bytes(image_bytes)
                 encoded = base64.b64encode(image_bytes).decode("ascii")
                 text = f"已生成图片：{image_path.name}"
@@ -1993,12 +2018,15 @@ async def chat_with_agent(req: AgentChatRequest):
                 response_text_parts.append(text)
                 return events
 
+            debug_log("Checking direct image-generation shortcut")
             direct_image_events = await try_direct_image_generation()
             if direct_image_events:
+                debug_log("Direct image-generation shortcut returned events")
                 for event_payload in direct_image_events:
                     yield event_payload
                 yield sse("done", {"session_id": session_id})
                 return
+            debug_log("Entering engine.submit_message event loop")
 
             def format_tool_failure(tool_errors: list[dict[str, Any]]) -> str:
                 last = tool_errors[-1] if tool_errors else {}
@@ -2036,6 +2064,72 @@ async def chat_with_agent(req: AgentChatRequest):
                         paths.append(resolved)
                 return paths
 
+            def unique_web_output_path(source: Path) -> Path:
+                web_output_dir.mkdir(parents=True, exist_ok=True)
+                candidate = web_output_dir / source.name
+                if not candidate.exists():
+                    return candidate
+                stem = source.stem or "generated"
+                suffix = source.suffix
+                counter = 1
+                while True:
+                    candidate = web_output_dir / f"{stem}_{counter}{suffix}"
+                    if not candidate.exists():
+                        return candidate
+                    counter += 1
+
+            def move_into_web_output(path: Path) -> Path:
+                resolved = path.expanduser().resolve()
+                try:
+                    resolved.relative_to(web_output_dir)
+                    return resolved
+                except ValueError:
+                    pass
+                target = unique_web_output_path(resolved)
+                shutil.move(str(resolved), str(target))
+                return target.resolve()
+
+            def collect_tool_generated_files(
+                tool_name: str,
+                output: str,
+                metadata: dict[str, Any] | None,
+            ) -> list[Path]:
+                paths = collect_generated_files(output)
+                if not isinstance(metadata, dict):
+                    return paths
+
+                raw_paths = metadata.get("paths")
+                if isinstance(raw_paths, (str, Path)):
+                    candidates = [raw_paths]
+                elif isinstance(raw_paths, list):
+                    candidates = raw_paths
+                else:
+                    candidates = []
+
+                for raw_path in candidates:
+                    if not raw_path:
+                        continue
+                    path = Path(str(raw_path)).expanduser()
+                    try:
+                        resolved = path.resolve()
+                    except Exception:
+                        continue
+                    if not resolved.is_file() or resolved in paths:
+                        continue
+                    if tool_name == "image_generation":
+                        try:
+                            resolved = move_into_web_output(resolved)
+                        except Exception as exc:
+                            debug_log(f"Failed to move image_generation output into web output dir: {resolved}: {exc}")
+                            continue
+                    else:
+                        try:
+                            resolved.relative_to(web_output_dir)
+                        except ValueError:
+                            continue
+                    paths.append(resolved)
+                return paths
+
             def marker_for_path(path: Path) -> str:
                 if path.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp", ".gif"}:
                     return "image"
@@ -2060,6 +2154,7 @@ async def chat_with_agent(req: AgentChatRequest):
                 )
 
             async for event in bundle.engine.submit_message(user_message):
+                debug_log(f"Engine event: {event.__class__.__name__}")
                 if isinstance(event, AssistantTextDelta):
                     accumulated_text.append(event.text)
                     response_text_parts.append(event.text)
@@ -2086,7 +2181,16 @@ async def chat_with_agent(req: AgentChatRequest):
                         },
                     )
                     if not event.is_error:
-                        for generated_path in collect_generated_files(str(event.output)):
+                        generated_paths = collect_tool_generated_files(
+                            event.tool_name,
+                            str(event.output),
+                            event.metadata,
+                        )
+                        if event.tool_name == "image_generation" and generated_paths and not "".join(response_text_parts).strip():
+                            text = "已生成图片：" + "、".join(path.name for path in generated_paths)
+                            response_text_parts.append(text)
+                            yield sse("text", {"text": text})
+                        for generated_path in generated_paths:
                             file_path = str(generated_path)
                             if file_path in sent_file_paths:
                                 continue
@@ -2149,7 +2253,7 @@ async def chat_with_agent(req: AgentChatRequest):
                             if " - " in raw_path:
                                 return match.group(0)
                             
-                            path = Path(_expand_path_alias(raw_path)).expanduser()
+                            path = Path(expand_web_path(raw_path)).expanduser()
                             if path.is_absolute() and path.exists():
                                 files_to_send.append({"path": str(path), "type": marker})
                                 return ""
@@ -2194,7 +2298,13 @@ async def chat_with_agent(req: AgentChatRequest):
                         debug_log(f"AssistantTurnComplete with empty text, tool_uses: {len(event.message.tool_uses) if hasattr(event.message, 'tool_uses') else 'N/A'}")
                         accumulated_text = []
 
-            if not "".join(response_text_parts).strip() and tool_errors:
+            if expects_generated_media and tool_errors and not sent_file_paths:
+                fallback_text = format_tool_failure(tool_errors)
+                visible_text = fallback_text if not "".join(response_text_parts).strip() else f"\n\n{fallback_text}"
+                response_text_parts.append(visible_text)
+                debug_log(f"Generated-media tool error surfaced to user: {fallback_text[:500]}")
+                yield sse("text", {"text": visible_text})
+            elif not "".join(response_text_parts).strip() and tool_errors:
                 fallback_text = format_tool_failure(tool_errors)
                 debug_log(f"Fallback tool error reply: {fallback_text[:500]}")
                 yield sse("text", {"text": fallback_text})
@@ -2240,8 +2350,13 @@ async def chat_with_agent(req: AgentChatRequest):
             )
             yield sse("done", {"session_id": session_id})
         except SystemExit as exc:
+            if 'debug_log' in locals():
+                debug_log(f"SystemExit in chat stream: {str(exc) or 'Runtime initialization failed'}")
             yield sse("error", {"message": str(exc) or "Runtime initialization failed"})
         except Exception as exc:
+            if 'debug_log' in locals():
+                debug_log(f"Exception in chat stream: {exc.__class__.__name__}: {exc}")
+            logger.exception("Web chat stream failed")
             yield sse("error", {"message": str(exc) or exc.__class__.__name__})
         finally:
             if 'conversation_token' in locals() and conversation_token is not None:
@@ -2597,3 +2712,300 @@ async def update_bot_config(channel_name: str, req: BotConfigUpdate):
     _save_settings(data)
 
     return {"status": "ok", "channel": channel_name}
+
+
+# ---------------------------------------------------------------------------
+# Tool Management APIs
+# ---------------------------------------------------------------------------
+
+from openharness.tools.restrictions import normalize_restricted_keywords, tool_restriction_config
+
+# Tools that require provider configuration
+_PROVIDER_TOOLS = {
+    "image_generation": {
+        "config_keys": ["profile", "model"],
+        "description": "Generate or edit raster images using configurable image generation providers.",
+    },
+    "image_to_text": {
+        "config_keys": ["profile", "model"],
+        "description": "Convert images to text descriptions using a vision-capable model.",
+    },
+    "web_search": {
+        "config_keys": ["api_key", "engine", "base_url"],
+        "description": "Search the web for real-time information.",
+    },
+}
+
+def _profile_model_options(profile: Any, selected_model: str = "") -> list[str]:
+    """Return model choices already known for a provider profile."""
+    models: list[str] = []
+    for value in [
+        *(getattr(profile, "allowed_models", []) or []),
+        getattr(profile, "last_model", "") or "",
+        getattr(profile, "default_model", "") or "",
+        selected_model,
+    ]:
+        text = str(value or "").strip()
+        if text and text not in models:
+            models.append(text)
+    return models
+
+
+def _profile_supports_tool(profile: Any, tool_name: str) -> bool:
+    provider = str(getattr(profile, "provider", "") or "").strip()
+    api_format = str(getattr(profile, "api_format", "") or "").strip()
+    if tool_name == "image_generation":
+        return provider == "openai_codex" or api_format == "openai"
+    if tool_name == "image_to_text":
+        return api_format == "openai" and provider not in {"openai_codex", "copilot"}
+    return True
+
+
+def _configured_tool_profiles(tool_name: str, selected_model: str = "") -> list[dict[str, Any]]:
+    from openharness.auth.manager import AuthManager
+    from openharness.config import load_settings
+
+    settings = load_settings()
+    manager = AuthManager(settings)
+    statuses = manager.get_profile_statuses()
+    profiles = []
+    for name, profile in settings.merged_profiles().items():
+        if not statuses.get(name, {}).get("configured"):
+            continue
+        if not _profile_supports_tool(profile, tool_name):
+            continue
+        profiles.append(
+            {
+                "name": name,
+                "label": profile.label,
+                "provider": profile.provider,
+                "api_format": profile.api_format,
+                "base_url": profile.base_url or "",
+                "models": _profile_model_options(profile, selected_model),
+            }
+        )
+    return profiles
+
+
+def _get_tool_config() -> dict[str, Any]:
+    """Get current tool configuration from settings."""
+    data = _load_settings()
+    return data.get("tools", {})
+
+
+def _save_tool_config(config: dict[str, Any]) -> None:
+    """Save tool configuration to settings."""
+    data = _load_settings()
+    data["tools"] = config
+    _save_settings(data)
+
+
+def _get_builtin_tools() -> list[dict[str, Any]]:
+    """Get list of all built-in tools with their current config."""
+    from openharness.tools import create_default_tool_registry
+
+    registry = create_default_tool_registry()
+    tool_config = _get_tool_config()
+    tools = []
+
+    for tool in registry.list_tools():
+        name = tool.name
+        cfg = tool_config.get(name, {})
+        if not isinstance(cfg, dict):
+            cfg = {}
+
+        # Determine if this is a provider-dependent tool
+        is_provider_tool = name in _PROVIDER_TOOLS
+        selected_profile = str(cfg.get("profile") or cfg.get("provider") or "").strip()
+        selected_model = str(cfg.get("model") or "").strip()
+        available_profiles = _configured_tool_profiles(name, selected_model) if is_provider_tool else []
+        model_options: list[str] = []
+        for profile in available_profiles:
+            if profile["name"] == selected_profile:
+                model_options = profile["models"]
+                break
+        if selected_model and selected_model not in model_options:
+            model_options.append(selected_model)
+
+        # Check if tool is enabled (default: true)
+        enabled_raw = cfg.get("enabled", True)
+        if isinstance(enabled_raw, str):
+            enabled = enabled_raw.strip().lower() in {"true", "1", "yes"}
+        else:
+            enabled = bool(enabled_raw)
+
+        # Get custom description if set
+        custom_description = cfg.get("description")
+        original_description = tool.description
+        restriction_config = tool_restriction_config(name, cfg)
+
+        tool_info = {
+            "name": name,
+            "description": custom_description or original_description,
+            "original_description": original_description,
+            "has_custom_description": custom_description is not None,
+            "enabled": enabled,
+            "is_provider_tool": is_provider_tool,
+            "provider_config": (
+                {k: cfg.get(k, "") for k in _PROVIDER_TOOLS.get(name, {}).get("config_keys", [])}
+                if is_provider_tool and name not in {"image_generation", "image_to_text"}
+                else ({"profile": selected_profile, "model": selected_model} if is_provider_tool else None)
+            ),
+            "available_profiles": available_profiles,
+            "model_options": model_options,
+            "restricted_keywords": restriction_config["restricted_keywords"],
+            "restriction_message": restriction_config["restriction_message"],
+            "has_custom_restrictions": not restriction_config["uses_default"],
+        }
+        tools.append(tool_info)
+
+    return tools
+
+
+@app.get("/api/tools")
+async def list_tools():
+    """List all built-in tools with their configuration."""
+    tools = _get_builtin_tools()
+    return {"tools": tools}
+
+
+@app.get("/api/tools/{tool_name}")
+async def get_tool(tool_name: str):
+    """Get details for a specific tool."""
+    tools = _get_builtin_tools()
+    for tool in tools:
+        if tool["name"] == tool_name:
+            return tool
+    raise HTTPException(status_code=404, detail=f"Tool not found: {tool_name}")
+
+
+@app.put("/api/tools/{tool_name}")
+async def update_tool(tool_name: str, data: dict[str, Any]):
+    """Update tool configuration (enabled status, description, provider config)."""
+    tools = _get_builtin_tools()
+    tool_found = False
+    for tool in tools:
+        if tool["name"] == tool_name:
+            tool_found = True
+            break
+
+    if not tool_found:
+        raise HTTPException(status_code=404, detail=f"Tool not found: {tool_name}")
+
+    tool_config = _get_tool_config()
+    if tool_name not in tool_config:
+        tool_config[tool_name] = {}
+
+    cfg = tool_config[tool_name]
+
+    # Update enabled status
+    if "enabled" in data:
+        cfg["enabled"] = bool(data["enabled"])
+
+    # Update custom description
+    if "description" in data:
+        desc = str(data["description"]).strip()
+        if desc:
+            cfg["description"] = desc
+        elif "description" in cfg:
+            del cfg["description"]
+
+    # Update provider config for provider-dependent tools
+    if tool_name in _PROVIDER_TOOLS and "provider_config" in data:
+        provider_cfg = data["provider_config"]
+        if isinstance(provider_cfg, dict):
+            if tool_name in {"image_generation", "image_to_text"}:
+                profiles = {profile["name"] for profile in _configured_tool_profiles(tool_name)}
+                if "profile" in provider_cfg:
+                    profile_name = str(provider_cfg.get("profile") or "").strip()
+                    if profile_name and profile_name not in profiles:
+                        raise HTTPException(status_code=400, detail=f"Profile is not available for {tool_name}: {profile_name}")
+                    if profile_name:
+                        cfg["profile"] = profile_name
+                    else:
+                        cfg.pop("profile", None)
+                if "model" in provider_cfg:
+                    model = str(provider_cfg.get("model") or "").strip()
+                    if model:
+                        cfg["model"] = model
+                    else:
+                        cfg.pop("model", None)
+                for legacy_key in (
+                    "provider",
+                    "api_key",
+                    "base_url",
+                    "codex_auth_token",
+                    "codex_base_url",
+                    "codex_model",
+                ):
+                    cfg.pop(legacy_key, None)
+            else:
+                for key in _PROVIDER_TOOLS[tool_name]["config_keys"]:
+                    if key in provider_cfg:
+                        value = provider_cfg[key]
+                        if value is not None and str(value).strip():
+                            cfg[key] = str(value).strip()
+                        elif key in cfg:
+                            del cfg[key]
+
+    if "restricted_keywords" in data:
+        cfg["restricted_keywords"] = normalize_restricted_keywords(data.get("restricted_keywords"))
+
+    if "restriction_message" in data:
+        cfg["restriction_message"] = str(data.get("restriction_message") or "").strip()
+
+    tool_config[tool_name] = cfg
+    _save_tool_config(tool_config)
+
+    return {"status": "ok", "tool": tool_name}
+
+
+@app.post("/api/tools/{tool_name}/toggle")
+async def toggle_tool(tool_name: str, data: dict[str, Any]):
+    """Enable or disable a tool."""
+    tools = _get_builtin_tools()
+    tool_found = False
+    for tool in tools:
+        if tool["name"] == tool_name:
+            tool_found = True
+            break
+
+    if not tool_found:
+        raise HTTPException(status_code=404, detail=f"Tool not found: {tool_name}")
+
+    tool_config = _get_tool_config()
+    if tool_name not in tool_config:
+        tool_config[tool_name] = {}
+
+    enabled = bool(data.get("enabled", True))
+    tool_config[tool_name]["enabled"] = enabled
+    _save_tool_config(tool_config)
+
+    return {"status": "ok", "tool": tool_name, "enabled": enabled}
+
+
+@app.delete("/api/tools/{tool_name}/description")
+async def reset_tool_description(tool_name: str):
+    """Reset tool description to original."""
+    tool_config = _get_tool_config()
+    if tool_name in tool_config and "description" in tool_config[tool_name]:
+        del tool_config[tool_name]["description"]
+        _save_tool_config(tool_config)
+    return {"status": "ok", "tool": tool_name}
+
+
+@app.delete("/api/tools/{tool_name}/restrictions")
+async def reset_tool_restrictions(tool_name: str):
+    """Reset tool restrictions to defaults."""
+    tool_config = _get_tool_config()
+    cfg = tool_config.get(tool_name)
+    if isinstance(cfg, dict):
+        changed = False
+        for key in ("restricted_keywords", "restriction_message"):
+            if key in cfg:
+                del cfg[key]
+                changed = True
+        if changed:
+            tool_config[tool_name] = cfg
+            _save_tool_config(tool_config)
+    return {"status": "ok", "tool": tool_name}

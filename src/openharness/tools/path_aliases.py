@@ -51,8 +51,8 @@ def expand_path_alias(path: str | None, aliases: dict[str, str]) -> str:
     return text
 
 
-def resolve_path(base: Path, candidate: str | None) -> Path:
-    text = expand_path_alias(candidate, path_aliases(base))
+def resolve_path(base: Path, candidate: str | None, aliases: dict[str, str] | None = None) -> Path:
+    text = expand_path_alias(candidate, aliases or path_aliases(base))
     path = Path(text or ".").expanduser()
     if not path.is_absolute():
         path = base / path

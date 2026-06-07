@@ -654,6 +654,7 @@ class Settings(BaseModel):
         default_factory=lambda: [".openharness/skills", ".agents/skills", ".claude/skills"]
     )
     mcp_servers: dict[str, McpServerConfig] = Field(default_factory=dict)
+    tools: dict[str, dict[str, Any]] = Field(default_factory=dict)
 
     # UI
     theme: str = "default"

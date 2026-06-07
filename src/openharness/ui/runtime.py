@@ -41,6 +41,7 @@ from openharness.prompts import build_runtime_system_prompt
 from openharness.state import AppState, AppStateStore
 from openharness.services.session_backend import DEFAULT_SESSION_BACKEND, SessionBackend
 from openharness.tools import ToolRegistry, create_default_tool_registry
+from openharness.tools.restrictions import tool_restriction_config
 from openharness.keybindings import load_keybindings
 
 PermissionPrompt = Callable[[str, str], Awaitable[bool]]
@@ -51,14 +52,68 @@ StreamRenderer = Callable[[StreamEvent], Awaitable[None]]
 ClearHandler = Callable[[], Awaitable[None]]
 
 
+def _tool_config(settings, tool_name: str) -> dict[str, Any]:
+    tools = getattr(settings, "tools", {}) or {}
+    cfg = tools.get(tool_name, {}) if isinstance(tools, dict) else {}
+    return cfg if isinstance(cfg, dict) else {}
+
+
+def _apply_tool_restrictions(tool_registry: ToolRegistry, settings) -> None:
+    names = {tool.name for tool in tool_registry.list_tools()}
+    for name in names:
+        cfg = tool_restriction_config(name, _tool_config(settings, name))
+        tool_registry.set_tool_restriction(
+            name,
+            keywords=cfg["restricted_keywords"],
+            message=str(cfg.get("restriction_message") or "").strip(),
+        )
+
+
+def _resolve_profile_tool_config(settings, tool_name: str) -> dict[str, str]:
+    cfg = _tool_config(settings, tool_name)
+    profile_name = str(cfg.get("profile") or cfg.get("provider") or "").strip()
+    model_override = str(cfg.get("model") or "").strip()
+    if not profile_name:
+        return {}
+
+    profile_settings = settings.model_copy(update={"active_profile": profile_name}).materialize_active_profile()
+    if tool_name == "image_generation" and profile_settings.provider != "openai_codex" and profile_settings.api_format != "openai":
+        return {}
+    if tool_name == "image_to_text" and (
+        profile_settings.api_format != "openai" or profile_settings.provider in {"openai_codex", "copilot"}
+    ):
+        return {}
+    try:
+        auth = profile_settings.resolve_auth()
+    except Exception:
+        return {}
+    provider = "codex" if profile_settings.provider == "openai_codex" else "openai"
+    return {
+        "enabled": str(cfg.get("enabled", True)).lower(),
+        "profile": profile_name,
+        "provider": provider,
+        "model": model_override or profile_settings.model,
+        "api_key": auth.value,
+        "base_url": profile_settings.base_url or "",
+        "codex_model": model_override or profile_settings.model,
+        "codex_base_url": profile_settings.base_url or "",
+        "codex_auth_token": auth.value if provider == "codex" else "",
+    }
+
+
 def _resolve_image_generation_config(settings) -> dict[str, str]:
     """Resolve image generation configuration from settings, environment, and Codex auth."""
     from openharness.config.settings import ImageGenerationConfig, ProviderProfile
 
+    tool_cfg = _tool_config(settings, "image_generation")
+    profile_cfg = _resolve_profile_tool_config(settings, "image_generation")
+    if profile_cfg:
+        return profile_cfg
+
     cfg = settings.image_generation
     env_cfg = ImageGenerationConfig.from_env()
     resolved = {
-        "enabled": str(cfg.enabled if cfg.enabled is not None else env_cfg.enabled).lower(),
+        "enabled": str(tool_cfg.get("enabled", cfg.enabled if cfg.enabled is not None else env_cfg.enabled)).lower(),
         "provider": cfg.provider or env_cfg.provider,
         "model": cfg.model or env_cfg.model,
         "api_key": cfg.api_key or env_cfg.api_key,
@@ -100,6 +155,17 @@ def _resolve_vision_config(settings) -> dict[str, str]:
     Priority: settings.vision fields > environment variables > empty.
     """
     from openharness.config.settings import VisionModelConfig
+
+    tool_cfg = _tool_config(settings, "image_to_text")
+    if str(tool_cfg.get("enabled", True)).strip().lower() not in {"true", "1", "yes"}:
+        return {}
+    profile_cfg = _resolve_profile_tool_config(settings, "image_to_text")
+    if profile_cfg:
+        return {
+            "model": profile_cfg["model"],
+            "api_key": profile_cfg["api_key"],
+            "base_url": profile_cfg["base_url"],
+        }
 
     cfg = settings.vision
     if cfg.is_configured:
@@ -351,6 +417,7 @@ async def build_runtime(
         if plugin.enabled and plugin.tools:
             for tool in plugin.tools:
                 tool_registry.register(tool)
+    _apply_tool_restrictions(tool_registry, settings)
     provider = detect_provider(settings)
     bridge_manager = get_bridge_manager()
     app_state = AppStateStore(

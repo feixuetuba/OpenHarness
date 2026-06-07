@@ -518,6 +518,10 @@
             <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
             <span class="truncate">Agent 配置</span>
           </button>
+          <button onclick="switchSubView('tools')" class="sub-nav-btn" data-subview="tools">
+            <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+            <span class="truncate">Tools 工具</span>
+          </button>
           <button onclick="switchSubView('skills')" class="sub-nav-btn" data-subview="skills">
             <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/></svg>
             <span class="truncate">Skill 技能</span>
@@ -1115,6 +1119,31 @@
             </div>
           </div>
         </div>
+
+        <!-- Tools View -->
+        <div id="viewTools" class="hidden space-y-6">
+          <div class="form-card">
+            <div class="flex items-center gap-3 mb-4">
+              <div class="w-8 h-8 rounded-lg bg-accent-green/10 flex items-center justify-center">
+                <svg class="w-4 h-4 text-accent-green" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+              </div>
+              <div>
+                <h3 class="text-base font-semibold text-text-primary">Tools 工具管理</h3>
+                <p class="text-xs text-text-muted">管理内置工具的启用状态、描述和供应商配置</p>
+              </div>
+            </div>
+            <div class="flex flex-wrap gap-2 items-center mb-4">
+              <button onclick="loadTools()" class="btn-secondary text-xs px-3 py-1.5">
+                <svg class="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+                刷新
+              </button>
+              <input type="text" id="toolSearch" placeholder="搜索工具..." class="form-input text-xs px-3 py-1.5" style="max-width: 250px;" oninput="filterTools()">
+            </div>
+            <div id="toolList" class="space-y-3">
+              <div class="text-sm text-text-muted">加载中...</div>
+            </div>
+          </div>
+        </div>
       </div>
 
       <!-- Bots Workspace -->
@@ -1302,6 +1331,7 @@
       document.getElementById('viewSessions').classList.toggle('hidden', view !== 'sessions');
       document.getElementById('viewTasks').classList.toggle('hidden', view !== 'tasks');
       document.getElementById('viewWebsearch').classList.toggle('hidden', view !== 'websearch');
+      document.getElementById('viewTools').classList.toggle('hidden', view !== 'tools');
       if (view === 'agents') loadAgents();
       if (view === 'skills') loadSkills();
       if (view === 'social') loadSocialSettings();
@@ -1311,6 +1341,7 @@
       if (view === 'sessions') loadSessions();
       if (view === 'tasks') loadTasks();
       if (view === 'websearch') loadWebSearchSettings();
+      if (view === 'tools') loadTools();
     }
 
     // Data Loading
@@ -4546,6 +4577,462 @@
         showNotification(`保存失败: ${e.message}`, 'error');
       }
     }
+
+    // Tool Management
+    let allTools = [];
+
+    async function loadTools() {
+      try {
+        const res = await fetch('/api/tools');
+        const data = await res.json();
+        allTools = data.tools || [];
+        renderTools();
+      } catch (e) {
+        document.getElementById('toolList').innerHTML = '<div class="text-sm text-red-400">加载失败: ' + e.message + '</div>';
+      }
+    }
+
+    function renderTools() {
+      const container = document.getElementById('toolList');
+      const searchTerm = (document.getElementById('toolSearch')?.value || '').toLowerCase();
+      
+      let filtered = allTools;
+      if (searchTerm) {
+        filtered = allTools.filter(t => 
+          t.name.toLowerCase().includes(searchTerm) || 
+          t.description.toLowerCase().includes(searchTerm)
+        );
+      }
+
+      if (filtered.length === 0) {
+        container.innerHTML = '<div class="text-sm text-text-muted">' + (searchTerm ? '未找到匹配的工具' : '暂无工具') + '</div>';
+        return;
+      }
+
+      container.innerHTML = filtered.map(tool => `
+        <div class="p-4 bg-dark-bg-secondary border border-dark-border rounded-lg animate-fade-in" id="tool-${tool.name}">
+          <div class="flex items-start justify-between gap-3 mb-3">
+            <div class="flex-1">
+              <div class="flex items-center gap-2 mb-1">
+                <span class="text-sm font-semibold text-text-primary">${tool.name}</span>
+                ${tool.is_provider_tool ? '<span class="text-xs px-2 py-0.5 bg-accent-blue/10 text-accent-blue rounded">供应商依赖</span>' : ''}
+              </div>
+              <p class="text-xs text-text-secondary">${escapeHtml(tool.description || '')}</p>
+            </div>
+            <div class="flex items-center gap-2">
+              <label class="relative inline-flex items-center cursor-pointer">
+                <input type="checkbox" class="sr-only peer" ${tool.enabled ? 'checked' : ''} onchange="toggleTool('${tool.name}', this.checked)">
+                <div class="w-9 h-5 bg-dark-border peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-accent-green/20 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-dark-border after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-accent-green"></div>
+              </label>
+            </div>
+          </div>
+          
+	          ${tool.is_provider_tool ? `
+          <div class="mt-3 pt-3 border-t border-dark-border/50">
+            <div class="flex items-center justify-between mb-2">
+              <span class="text-xs font-medium text-text-secondary">供应商配置</span>
+            </div>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-2">
+              ${renderProviderConfigFields(tool)}
+            </div>
+          </div>
+	          ` : ''}
+
+	          <div class="mt-3 pt-3 border-t border-dark-border/50">
+	            <div class="flex items-center justify-between mb-2">
+	              <span class="text-xs font-medium text-text-secondary">使用范围限制</span>
+	              <span class="text-xs text-text-muted">${tool.has_custom_restrictions ? '已自定义' : '使用默认限制'}</span>
+	            </div>
+	            <div class="grid grid-cols-1 md:grid-cols-2 gap-2">
+	              <div class="flex flex-col gap-1">
+	                <label class="text-xs text-text-muted">限制关键词</label>
+	                <textarea id="tool-restrictions-${tool.name}"
+	                          class="form-input text-xs px-2 py-1.5 font-mono"
+	                          rows="3"
+	                          placeholder="每行一个关键词">${escapeHtml((tool.restricted_keywords || []).join('\n'))}</textarea>
+	              </div>
+	              <div class="flex flex-col gap-1">
+	                <label class="text-xs text-text-muted">命中后提示</label>
+	                <textarea id="tool-restriction-message-${tool.name}"
+	                          class="form-input text-xs px-2 py-1.5"
+	                          rows="3"
+	                          placeholder="给 LLM/用户的错误说明">${escapeHtml(tool.restriction_message || '')}</textarea>
+	              </div>
+	            </div>
+	            <div class="flex items-center justify-end gap-2 mt-2">
+	              ${tool.has_custom_restrictions ? `<button onclick="resetToolRestrictions('${tool.name}')" class="btn-secondary text-xs px-2 py-1">恢复默认</button>` : ''}
+	              <button onclick="saveToolRestrictions('${tool.name}')" class="btn-secondary text-xs px-2 py-1">保存限制</button>
+	            </div>
+	          </div>
+	          
+	          <div class="mt-3 pt-3 border-t border-dark-border/50 flex items-center justify-between">
+            <span class="text-xs text-text-muted">${tool.has_custom_description ? '已自定义描述' : '使用默认描述'}</span>
+            <div class="flex gap-2">
+              ${tool.has_custom_description ? `<button onclick="resetToolDescription('${tool.name}')" class="btn-secondary text-xs px-2 py-1">重置描述</button>` : ''}
+              <button onclick="editToolDescription('${tool.name}')" class="btn-secondary text-xs px-2 py-1">编辑描述</button>
+            </div>
+          </div>
+        </div>
+      `).join('');
+    }
+
+    function renderProviderConfigFields(tool) {
+      if (!tool.provider_config) return '';
+      if (['image_generation', 'image_to_text'].includes(tool.name)) {
+        const selectedProfile = tool.provider_config.profile || '';
+        const profileOptions = (tool.available_profiles || []).map(p =>
+          `<option value="${p.name}" ${selectedProfile === p.name ? 'selected' : ''}>${p.name}${p.label ? ` · ${p.label}` : ''}</option>`
+        ).join('');
+        const modelOptions = (tool.model_options || []).map(m =>
+          `<option value="${m}" ${tool.provider_config.model === m ? 'selected' : ''}>${m}</option>`
+        ).join('');
+        return `
+          <div class="flex flex-col gap-1">
+            <label class="text-xs text-text-muted">供应商</label>
+            <select id="tool-config-${tool.name}-profile"
+                    class="form-input text-xs px-2 py-1.5"
+                    onchange="onToolProviderChange('${tool.name}', 'profile', this.value)">
+              <option value="">选择已配置供应商</option>
+              ${profileOptions}
+            </select>
+          </div>
+          <div class="flex flex-col gap-1">
+            <label class="text-xs text-text-muted">模型</label>
+            <div class="flex gap-2">
+              <select id="tool-config-${tool.name}-model"
+                      class="form-input text-xs px-2 py-1.5 flex-1"
+                      onchange="updateToolProviderConfig('${tool.name}', 'model', this.value)">
+                <option value="">使用供应商默认模型</option>
+                ${modelOptions}
+              </select>
+              <button onclick="refreshToolModelList('${tool.name}')" class="btn-secondary text-xs px-2 py-1.5" title="刷新模型列表">
+                <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+              </button>
+            </div>
+          </div>
+        `;
+      }
+      
+      const fields = {
+        'api_key': { label: 'API Key', type: 'password', placeholder: '输入 API Key' },
+        'base_url': { label: 'Base URL', type: 'text', placeholder: 'https://api.example.com' },
+        'model': { label: '模型', type: 'select', placeholder: '选择模型' },
+        'provider': { label: '供应商', type: 'select', placeholder: '选择已配置的供应商' },
+        'codex_auth_token': { label: 'Codex Auth Token', type: 'password', placeholder: 'Codex 认证令牌' },
+        'codex_base_url': { label: 'Codex Base URL', type: 'text', placeholder: 'Codex API 地址' },
+        'codex_model': { label: 'Codex 模型', type: 'text', placeholder: '例如: gpt-5.4' },
+        'engine': { label: '搜索引擎', type: 'text', placeholder: '搜索引擎名称' },
+      };
+
+      return Object.entries(tool.provider_config)
+        .filter(([_, value]) => value !== undefined)
+        .map(([key, value]) => {
+          const field = fields[key] || { label: key, type: 'text', placeholder: '' };
+          const displayValue = value ? (field.type === 'password' ? '••••••••' : value) : '';
+          
+          if (field.type === 'select' && key === 'provider') {
+            const options = profileList.map(p => 
+              `<option value="${p.name}" ${value === p.name ? 'selected' : ''}>${p.name} (${p.provider})</option>`
+            ).join('');
+            return `
+              <div class="flex flex-col gap-1">
+                <label class="text-xs text-text-muted">${field.label}</label>
+                <select id="tool-config-${tool.name}-${key}" 
+                        class="form-input text-xs px-2 py-1.5"
+                        onchange="onToolProviderChange('${tool.name}', '${key}', this.value)">
+                  <option value="">选择供应商</option>
+                  ${options}
+                </select>
+              </div>
+            `;
+          }
+          
+          if (field.type === 'select' && key === 'model') {
+            const models = tool._models || [];
+            const options = models.map(m => 
+              `<option value="${m}" ${value === m ? 'selected' : ''}>${m}</option>`
+            ).join('');
+            return `
+              <div class="flex flex-col gap-1">
+                <label class="text-xs text-text-muted">${field.label}</label>
+                <div class="flex gap-2">
+                  <select id="tool-config-${tool.name}-${key}" 
+                          class="form-input text-xs px-2 py-1.5 flex-1"
+                          onchange="updateToolProviderConfig('${tool.name}', '${key}', this.value)">
+                    <option value="">选择模型</option>
+                    ${options}
+                  </select>
+                  <button onclick="refreshToolModelList('${tool.name}')" class="btn-secondary text-xs px-2 py-1.5" title="刷新模型列表">
+                    <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+                  </button>
+                </div>
+              </div>
+            `;
+          }
+          
+          return `
+            <div class="flex flex-col gap-1">
+              <label class="text-xs text-text-muted">${field.label}</label>
+              <input type="${field.type}" 
+                     id="tool-config-${tool.name}-${key}" 
+                     class="form-input text-xs px-2 py-1.5" 
+                     placeholder="${field.placeholder}"
+                     value="${value || ''}"
+                     onchange="updateToolProviderConfig('${tool.name}', '${key}', this.value)">
+            </div>
+          `;
+        }).join('');
+    }
+
+    async function onToolProviderChange(toolName, key, value) {
+      const tool = allTools.find(t => t.name === toolName);
+      if (!tool || !tool.provider_config) return;
+
+      const providerConfig = { ...tool.provider_config, [key]: value };
+      if (['image_generation', 'image_to_text'].includes(toolName)) {
+        providerConfig.model = '';
+      }
+      
+      // 如果选择了供应商，清空模型选择并获取模型列表
+      if (value) {
+        await saveToolProviderConfig(toolName, providerConfig);
+        await refreshToolModelList(toolName);
+      } else {
+        await saveToolProviderConfig(toolName, providerConfig);
+        renderTools();
+      }
+    }
+
+    async function refreshToolModelList(toolName) {
+      const tool = allTools.find(t => t.name === toolName);
+      if (!tool || !tool.provider_config) return;
+      
+      const providerName = tool.provider_config.profile || tool.provider_config.provider;
+      if (!providerName) {
+        alert('请先选择一个供应商');
+        return;
+      }
+      
+      const profile = (tool.available_profiles || []).find(p => p.name === providerName) || profileList.find(p => p.name === providerName);
+      if (!profile || !profile.base_url) {
+        alert('该供应商没有 Base URL，无法获取模型列表');
+        return;
+      }
+
+      // 显示加载状态
+      const modelSelect = document.getElementById(`tool-config-${toolName}-model`);
+      if (modelSelect) {
+        modelSelect.innerHTML = '<option value="">加载中...</option>';
+      }
+
+      try {
+        const res = await fetch('/api/test-connection', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            base_url: profile.base_url,
+            api_format: profile.api_format || 'openai',
+            profile_name: profile.name
+          })
+        });
+        const data = await res.json();
+        if (!data.success) {
+          alert('获取模型列表失败: ' + (data.message || '未知错误'));
+          return;
+        }
+        
+        const models = data.models || [];
+        tool.model_options = models;
+        renderTools();
+      } catch (e) {
+        alert('获取模型列表失败: ' + e.message);
+      }
+    }
+
+    async function toggleTool(toolName, enabled) {
+      try {
+        const res = await fetch(`/api/tools/${toolName}/toggle`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ enabled })
+        });
+        if (!res.ok) {
+          const err = await res.json();
+          alert('操作失败: ' + (err.detail || `HTTP ${res.status}`));
+          await loadTools();
+          return;
+        }
+        await loadTools();
+      } catch (e) {
+        alert('操作失败: ' + e.message);
+        await loadTools();
+      }
+    }
+
+    async function editToolDescription(toolName) {
+      const tool = allTools.find(t => t.name === toolName);
+      if (!tool) return;
+      
+      // 创建模态框
+      const modal = document.createElement('div');
+      modal.className = 'fixed inset-0 bg-black/50 flex items-center justify-center z-50';
+      modal.innerHTML = `
+        <div class="bg-dark-bg-primary border border-dark-border rounded-lg p-6 w-full max-w-2xl mx-4 animate-fade-in">
+          <div class="flex items-center justify-between mb-4">
+            <h3 class="text-base font-semibold text-text-primary">编辑工具描述 - ${tool.name}</h3>
+            <button onclick="this.closest('.fixed').remove()" class="text-text-muted hover:text-text-primary">
+              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+            </button>
+          </div>
+          <textarea id="toolDescEdit" class="form-input w-full p-3 font-mono text-sm" rows="8" style="min-height: 200px; resize: vertical;">${tool.description}</textarea>
+          <div class="flex justify-end gap-2 mt-4">
+            <button onclick="this.closest('.fixed').remove()" class="btn-secondary px-4 py-2">取消</button>
+            <button onclick="saveToolDescription('${tool.name}')" class="btn-primary px-4 py-2">保存</button>
+          </div>
+        </div>
+      `;
+      document.body.appendChild(modal);
+      
+      // 自动聚焦
+      setTimeout(() => {
+        const textarea = document.getElementById('toolDescEdit');
+        if (textarea) {
+          textarea.focus();
+          textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+        }
+      }, 100);
+    }
+
+    async function saveToolDescription(toolName) {
+      const textarea = document.getElementById('toolDescEdit');
+      if (!textarea) return;
+      
+      const newDesc = textarea.value.trim();
+      if (!newDesc) {
+        alert('描述不能为空');
+        return;
+      }
+
+      try {
+        const res = await fetch(`/api/tools/${toolName}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ description: newDesc })
+        });
+        if (!res.ok) {
+          const err = await res.json();
+          alert('保存失败: ' + (err.detail || `HTTP ${res.status}`));
+          return;
+        }
+        // 关闭模态框
+        const modal = document.querySelector('.fixed.inset-0.bg-black\\/50');
+        if (modal) modal.remove();
+        await loadTools();
+      } catch (e) {
+        alert('保存失败: ' + e.message);
+      }
+    }
+
+    async function resetToolDescription(toolName) {
+      if (!confirm('确定要重置描述为默认值吗?')) return;
+      
+      try {
+        const res = await fetch(`/api/tools/${toolName}/description`, {
+          method: 'DELETE'
+        });
+        if (!res.ok) {
+          const err = await res.json();
+          alert('重置失败: ' + (err.detail || `HTTP ${res.status}`));
+          return;
+        }
+        await loadTools();
+      } catch (e) {
+        alert('重置失败: ' + e.message);
+      }
+    }
+
+    async function saveToolProviderConfig(toolName, providerConfig, options = {}) {
+      const reload = options.reload !== false;
+      
+      try {
+        const res = await fetch(`/api/tools/${toolName}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ provider_config: providerConfig })
+        });
+        if (!res.ok) {
+          const err = await res.json();
+          alert('保存失败: ' + (err.detail || `HTTP ${res.status}`));
+          if (reload) await loadTools();
+          return false;
+        }
+        if (reload) await loadTools();
+        return true;
+      } catch (e) {
+        alert('保存失败: ' + e.message);
+        if (reload) await loadTools();
+        return false;
+      }
+    }
+
+	    async function updateToolProviderConfig(toolName, key, value) {
+	      const tool = allTools.find(t => t.name === toolName);
+	      if (!tool || !tool.provider_config) return;
+
+	      const providerConfig = { ...tool.provider_config, [key]: value };
+	      await saveToolProviderConfig(toolName, providerConfig);
+	    }
+
+	    async function saveToolRestrictions(toolName) {
+	      const keywordsEl = document.getElementById(`tool-restrictions-${toolName}`);
+	      const messageEl = document.getElementById(`tool-restriction-message-${toolName}`);
+	      if (!keywordsEl || !messageEl) return;
+
+	      const restrictedKeywords = keywordsEl.value
+	        .split(/[\n,]/)
+	        .map(item => item.trim())
+	        .filter(Boolean);
+
+	      try {
+	        const res = await fetch(`/api/tools/${toolName}`, {
+	          method: 'PUT',
+	          headers: { 'Content-Type': 'application/json' },
+	          body: JSON.stringify({
+	            restricted_keywords: Array.from(new Set(restrictedKeywords)),
+	            restriction_message: messageEl.value.trim()
+	          })
+	        });
+	        if (!res.ok) {
+	          const err = await res.json();
+	          alert('保存失败: ' + (err.detail || `HTTP ${res.status}`));
+	          return;
+	        }
+	        await loadTools();
+	      } catch (e) {
+	        alert('保存失败: ' + e.message);
+	      }
+	    }
+
+	    async function resetToolRestrictions(toolName) {
+	      if (!confirm('确定要恢复默认限制吗?')) return;
+	      try {
+	        const res = await fetch(`/api/tools/${toolName}/restrictions`, {
+	          method: 'DELETE'
+	        });
+	        if (!res.ok) {
+	          const err = await res.json();
+	          alert('恢复失败: ' + (err.detail || `HTTP ${res.status}`));
+	          return;
+	        }
+	        await loadTools();
+	      } catch (e) {
+	        alert('恢复失败: ' + e.message);
+	      }
+	    }
+
+	    function filterTools() {
+	      renderTools();
+	    }
 
     // Init
     document.addEventListener('DOMContentLoaded', () => {

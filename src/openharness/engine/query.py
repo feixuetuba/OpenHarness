@@ -1017,6 +1017,28 @@ async def _execute_tool_call(
             is_error=True,
         )
 
+    restriction_error = context.tool_registry.restriction_violation(tool_name, tool_input)
+    if restriction_error:
+        log.info("[TOOL_BLOCKED] tool=%s reason=%s", tool_name, restriction_error)
+        _log_conversation_tool_call(
+            tool_name=tool_name,
+            tool_use_id=tool_use_id,
+            tool_input=tool_input,
+            tool_output=restriction_error,
+            is_error=True,
+            stage="restriction_blocked",
+            reason="restricted_keywords",
+        )
+        return ToolResultBlock(
+            tool_use_id=tool_use_id,
+            content=restriction_error,
+            is_error=True,
+            result_metadata={
+                "blocked_reason": "restricted_keywords",
+                "restriction": context.tool_registry.get_tool_restriction(tool_name),
+            },
+        )
+
     try:
         parsed_input = tool.input_model.model_validate(tool_input)
     except Exception as exc:

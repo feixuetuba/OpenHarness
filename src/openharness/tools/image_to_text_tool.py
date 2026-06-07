@@ -17,7 +17,7 @@ from pydantic import BaseModel, Field
 
 from openharness.api.openai_client import OpenAICompatibleClient
 from openharness.tools.base import BaseTool, ToolExecutionContext, ToolResult
-from openharness.tools.path_aliases import resolve_path
+from openharness.tools.path_aliases import path_aliases, resolve_path
 
 log = logging.getLogger(__name__)
 
@@ -150,7 +150,15 @@ class ImageToTextTool(BaseTool):
             return arguments.image_data, arguments.media_type
 
         if arguments.image_path:
-            path = resolve_path(context.cwd, arguments.image_path)
+            aliases = path_aliases(context.cwd)
+            raw_aliases = context.metadata.get("path_aliases", {})
+            if isinstance(raw_aliases, dict):
+                for raw_name, raw_path in raw_aliases.items():
+                    name = str(raw_name).strip().lstrip("$")
+                    value = str(raw_path or "").strip()
+                    if name and value:
+                        aliases[name] = str(Path(value).expanduser().resolve())
+            path = resolve_path(context.cwd, arguments.image_path, aliases)
 
             if not path.exists():
                 log.warning("image_to_text: image not found at %s", path)

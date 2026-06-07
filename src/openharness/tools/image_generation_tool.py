@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field
 from openharness.api.codex_client import _build_codex_headers, _resolve_codex_url
 from openharness.api.openai_client import _normalize_openai_base_url
 from openharness.tools.base import BaseTool, ToolExecutionContext, ToolResult
+from openharness.tools.path_aliases import expand_path_alias, path_aliases
 
 log = logging.getLogger(__name__)
 
@@ -103,9 +104,10 @@ class ImageGenerationTool(BaseTool):
         provider = _resolve_provider(arguments.provider, config)
 
         try:
-            output_paths = self._resolve_output_paths(arguments, context.cwd)
+            aliases = _context_path_aliases(context)
+            output_paths = self._resolve_output_paths(arguments, context.cwd, aliases)
             if provider == "codex":
-                image_b64, revised_prompt = await self._generate_with_codex(arguments, config)
+                image_b64, revised_prompt = await self._generate_with_codex(arguments, config, aliases)
                 written = self._write_images(image_b64, output_paths, overwrite=arguments.overwrite)
                 extra = f"\nRevised prompt: {revised_prompt}" if revised_prompt else ""
                 return ToolResult(
@@ -121,7 +123,7 @@ class ImageGenerationTool(BaseTool):
                     },
                 )
 
-            image_b64 = await self._generate_with_openai(arguments, config)
+            image_b64 = await self._generate_with_openai(arguments, config, aliases)
             written = self._write_images(image_b64, output_paths, overwrite=arguments.overwrite)
         except Exception as exc:
             log.exception("image_generation failed")
@@ -137,7 +139,12 @@ class ImageGenerationTool(BaseTool):
             metadata={"paths": [str(path) for path in written], "model": model, "mode": mode, "provider": "openai"},
         )
 
-    async def _generate_with_openai(self, arguments: ImageGenerationToolInput, config: dict[str, object]) -> list[str]:
+    async def _generate_with_openai(
+        self,
+        arguments: ImageGenerationToolInput,
+        config: dict[str, object],
+        aliases: dict[str, str],
+    ) -> list[str]:
         model = (arguments.model or str(config.get("model") or _DEFAULT_MODEL)).strip()
         api_key = str(config.get("api_key") or "").strip()
         base_url = str(config.get("base_url") or "").strip()
@@ -147,14 +154,16 @@ class ImageGenerationTool(BaseTool):
                 "or OPENHARNESS_IMAGE_GENERATION_API_KEY, or choose provider='codex'."
             )
         if arguments.image_paths:
-            return await self._edit_images(arguments, model, api_key, base_url)
+            return await self._edit_images(arguments, model, api_key, base_url, aliases)
         return await self._generate_images(arguments, model, api_key, base_url)
 
     async def _generate_with_codex(
         self,
         arguments: ImageGenerationToolInput,
         config: dict[str, object],
+        aliases: dict[str, str] | None = None,
     ) -> tuple[list[str], str | None]:
+        aliases = aliases or path_aliases(Path.cwd())
         auth_token = str(config.get("codex_auth_token") or "").strip()
         if not auth_token:
             raise RuntimeError(
@@ -169,7 +178,7 @@ class ImageGenerationTool(BaseTool):
             "store": False,
             "stream": True,
             "instructions": "Generate the requested image using the hosted image_generation tool.",
-            "input": [{"role": "user", "content": _codex_user_content(arguments, prompt)}],
+            "input": [{"role": "user", "content": _codex_user_content(arguments, prompt, aliases)}],
             "text": {"verbosity": "medium"},
             "tools": [{"type": "image_generation", "output_format": arguments.output_format}],
             "tool_choice": "auto",
@@ -213,17 +222,31 @@ class ImageGenerationTool(BaseTool):
             default_headers={"Authorization": f"Bearer {api_key}"},
         )
         result = await client.images.generate(**_image_payload(arguments, model))
-        return _extract_b64_images(result)
+        return await _extract_b64_images(result)
 
     @staticmethod
-    async def _edit_images(arguments: ImageGenerationToolInput, model: str, api_key: str, base_url: str) -> list[str]:
+    async def _edit_images(
+        arguments: ImageGenerationToolInput,
+        model: str,
+        api_key: str,
+        base_url: str,
+        aliases: dict[str, str] | None = None,
+    ) -> list[str]:
         client = AsyncOpenAI(
             api_key=api_key,
             base_url=_normalize_openai_base_url(base_url),
             default_headers={"Authorization": f"Bearer {api_key}"},
         )
-        image_handles = [Path(path).expanduser().resolve().open("rb") for path in arguments.image_paths]
-        mask_handle = Path(arguments.mask_path).expanduser().resolve().open("rb") if arguments.mask_path else None
+        aliases = aliases or path_aliases(Path.cwd())
+        image_handles = [
+            Path(expand_path_alias(path, aliases)).expanduser().resolve().open("rb")
+            for path in arguments.image_paths
+        ]
+        mask_handle = (
+            Path(expand_path_alias(arguments.mask_path, aliases)).expanduser().resolve().open("rb")
+            if arguments.mask_path
+            else None
+        )
         try:
             payload = _image_payload(arguments, model)
             payload["image"] = image_handles if len(image_handles) > 1 else image_handles[0]
@@ -235,18 +258,22 @@ class ImageGenerationTool(BaseTool):
                 handle.close()
             if mask_handle is not None:
                 mask_handle.close()
-        return _extract_b64_images(result)
+        return await _extract_b64_images(result)
 
     @staticmethod
-    def _resolve_output_paths(arguments: ImageGenerationToolInput, cwd: Path) -> list[Path]:
+    def _resolve_output_paths(
+        arguments: ImageGenerationToolInput,
+        cwd: Path,
+        aliases: dict[str, str] | None = None,
+    ) -> list[Path]:
         suffix = f".{arguments.output_format}"
         if arguments.output_path:
-            base = Path(arguments.output_path)
+            base = Path(expand_path_alias(arguments.output_path, aliases or path_aliases(cwd)))
             if not base.is_absolute():
                 base = cwd / base
             base = base.expanduser().resolve()
         else:
-            out_dir = Path(arguments.output_dir)
+            out_dir = Path(expand_path_alias(arguments.output_dir, aliases or path_aliases(cwd)))
             if not out_dir.is_absolute():
                 out_dir = cwd / out_dir
             out_dir = out_dir.expanduser().resolve()
@@ -282,6 +309,18 @@ def _resolve_provider(requested: str, config: dict[str, object]) -> Literal["ope
     return "openai"
 
 
+def _context_path_aliases(context: ToolExecutionContext) -> dict[str, str]:
+    aliases = path_aliases(context.cwd)
+    raw_aliases = context.metadata.get("path_aliases", {})
+    if isinstance(raw_aliases, dict):
+        for raw_name, raw_path in raw_aliases.items():
+            name = str(raw_name).strip().lstrip("$")
+            path = str(raw_path or "").strip()
+            if name and path:
+                aliases[name] = str(Path(path).expanduser().resolve())
+    return aliases
+
+
 def _image_payload(arguments: ImageGenerationToolInput, model: str) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "model": model,
@@ -307,10 +346,15 @@ def _codex_prompt(arguments: ImageGenerationToolInput) -> str:
     return "\n".join(line for line in lines if line.strip())
 
 
-def _codex_user_content(arguments: ImageGenerationToolInput, prompt: str) -> list[dict[str, str]]:
+def _codex_user_content(
+    arguments: ImageGenerationToolInput,
+    prompt: str,
+    aliases: dict[str, str] | None = None,
+) -> list[dict[str, str]]:
     content = [{"type": "input_text", "text": prompt}]
+    aliases = aliases or path_aliases(Path.cwd())
     for path_str in arguments.image_paths:
-        path = Path(path_str).expanduser().resolve()
+        path = Path(expand_path_alias(path_str, aliases)).expanduser().resolve()
         media_type = _media_type_for_path(path)
         data = base64.b64encode(path.read_bytes()).decode("ascii")
         content.append({"type": "input_image", "image_url": f"data:{media_type};base64,{data}"})
@@ -355,8 +399,9 @@ async def _iter_sse_events(response: httpx.Response):
                 yield event
 
 
-def _extract_b64_images(result: Any) -> list[str]:
+async def _extract_b64_images(result: Any) -> list[str]:
     images: list[str] = []
+    urls: list[str] = []
     for item in getattr(result, "data", []) or []:
         b64 = getattr(item, "b64_json", None)
         if isinstance(b64, str) and b64:
@@ -365,4 +410,13 @@ def _extract_b64_images(result: Any) -> list[str]:
         url = getattr(item, "url", None)
         if isinstance(url, str) and url.startswith("data:image/") and ";base64," in url:
             images.append(url.split(";base64,", 1)[1])
+            continue
+        if isinstance(url, str) and url.startswith(("http://", "https://")):
+            urls.append(url)
+    if urls:
+        async with httpx.AsyncClient(timeout=120.0, follow_redirects=True) as client:
+            for url in urls:
+                response = await client.get(url)
+                response.raise_for_status()
+                images.append(base64.b64encode(response.content).decode("ascii"))
     return images
