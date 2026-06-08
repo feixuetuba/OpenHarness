@@ -111,7 +111,25 @@ class QQChannel(BaseChannel):
         while self._running:
             try:
                 self.online = False
+                logger.info(
+                    "QQ bot connecting: app_id=%s, sandbox=%s",
+                    self.config.app_id,
+                    getattr(self.config, "sandbox", False),
+                )
                 await self._client.start(appid=self.config.app_id, secret=self.config.app_secret)
+            except AttributeError as e:
+                self.online = False
+                self.last_error = str(e)
+                logger.error(
+                    "QQ bot login failed: API returned invalid robot info. "
+                    "Please check app_id and app_secret configuration. Error: %s",
+                    e,
+                    exc_info=True,
+                )
+                # 如果是认证失败，不要频繁重试
+                if self._running:
+                    logger.info("Waiting 30 seconds before reconnecting QQ bot...")
+                    await asyncio.sleep(30)
             except Exception as e:
                 self.online = False
                 self.last_error = str(e)

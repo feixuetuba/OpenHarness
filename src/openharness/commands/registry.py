@@ -527,7 +527,7 @@ def create_default_command_registry(
             "ship": "排队并执行 ohmo 驱动的仓库任务",
             "list": "列出所有支持的指令及中文说明",
         }
-        for name in registry.list_commands():
+        for name in sorted(registry.list_commands(), key=lambda cmd: cmd.name):
             desc = command_descriptions.get(name.name, name.description)
             lines.append(f"/{name.name:<16} {desc}")
         return CommandResult(message="\n".join(lines))

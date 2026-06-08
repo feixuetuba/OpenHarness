@@ -295,6 +295,14 @@ class WebConfigSmartChannelBridge:
             content[:100] if content else "",
         )
 
+        # 检查是否是斜杠命令，如果是则直接处理
+        if content.strip().startswith("/"):
+            command_result = await self._handle_slash_command(msg, content.strip())
+            if command_result is not None:
+                # 命令已处理，直接返回结果
+                await self._publish_reply(msg, command_result)
+                return
+
         engine = self._engine
         agent_id = self._resolve_agent_id(msg.channel) if self._resolve_agent_id else None
         if agent_id and self._create_engine_for_agent is not None:
@@ -716,6 +724,65 @@ class WebConfigSmartChannelBridge:
             event="assistant_notice",
         )
         await self._publish_reply(msg, text)
+
+    async def _handle_slash_command(self, msg: InboundMessage, content: str) -> str | None:
+        """处理社交渠道中的斜杠命令。
+        
+        如果内容是斜杠命令（如 /list, /help, /clear 等），则调用命令注册表处理并返回结果。
+        如果不是已知命令，返回 None，让消息继续走正常的 LLM 处理流程。
+        """
+        try:
+            from openharness.commands.registry import create_default_command_registry, CommandContext
+            
+            # 创建命令注册表
+            registry = create_default_command_registry()
+            
+            # 查找命令
+            parsed = registry.lookup(content)
+            if parsed is None:
+                # 不是已知命令，返回 None 让消息继续走 LLM 流程
+                return None
+            
+            command, args = parsed
+            
+            # 检查命令是否允许远程调用
+            if not getattr(command, "remote_invocable", True):
+                return f"/{command.name} 仅在本地的 OpenHarness UI 中可用。"
+            
+            # 创建命令上下文
+            engine = self._engine
+            context = CommandContext(
+                engine=engine,
+                cwd=self._cwd,
+                tool_registry=None,
+                app_state=None,
+                session_id=None,
+                extra_skill_dirs=(),
+                extra_plugin_roots=(),
+                memory_backend=None,
+                include_project_memory=False,
+            )
+            
+            # 执行命令
+            result = await command.handler(args, context)
+            
+            # 返回命令结果
+            if result.message:
+                return result.message
+            
+            # 如果命令没有返回消息但有其他动作
+            if result.should_exit:
+                return "正在退出 OpenHarness..."
+            if result.clear_screen:
+                return "对话历史已清除。"
+            if result.refresh_runtime:
+                return "命令已执行，运行时已刷新。"
+            
+            return "命令已执行。"
+            
+        except Exception as e:
+            logger.exception("Failed to handle slash command: %s", content)
+            return f"执行命令时出错：{str(e)}"
 
     def _normalize_inbound_media_paths(self, msg: InboundMessage, media: list[str]) -> list[str]:
         normalized: list[str] = []
