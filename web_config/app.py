@@ -3009,3 +3009,292 @@ async def reset_tool_restrictions(tool_name: str):
             tool_config[tool_name] = cfg
             _save_tool_config(tool_config)
     return {"status": "ok", "tool": tool_name}
+
+
+# ---------------------------------------------------------------------------
+# Cron Job API Routes
+# ---------------------------------------------------------------------------
+
+def _load_cron_jobs() -> list[dict[str, Any]]:
+    from openharness.services.cron import load_cron_jobs as _load
+    return _load()
+
+
+def _save_cron_jobs(jobs: list[dict[str, Any]]) -> None:
+    from openharness.services.cron import save_cron_jobs as _save
+    _save(jobs)
+
+
+def _cron_job_to_api(job: dict[str, Any]) -> dict[str, Any]:
+    """Convert internal cron job to API-safe representation."""
+    result = dict(job)
+    # Mask sensitive fields in payload if any
+    result.pop("last_run", None)
+    result.pop("last_status", None)
+    result.pop("next_run", None)
+    return result
+
+
+@app.get("/api/cron/jobs")
+async def get_cron_jobs():
+    """List all cron jobs."""
+    from openharness.services.cron import load_cron_jobs
+    from openharness.services.cron_scheduler import scheduler_status
+
+    jobs = load_cron_jobs()
+    status = scheduler_status()
+
+    return {
+        "jobs": jobs,
+        "scheduler_running": status["running"],
+        "scheduler_pid": status.get("pid"),
+    }
+
+
+@app.post("/api/cron/jobs")
+async def create_cron_job(data: dict[str, Any]):
+    """Create or update a cron job."""
+    from openharness.services.cron import upsert_cron_job, validate_cron_expression, validate_timezone
+
+    name = str(data.get("name") or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Job name is required")
+
+    schedule = str(data.get("schedule") or "").strip()
+    if not schedule:
+        raise HTTPException(status_code=400, detail="Schedule (cron expression) is required")
+
+    if not validate_cron_expression(schedule):
+        raise HTTPException(status_code=400, detail=f"Invalid cron expression: {schedule!r}")
+
+    timezone_val = str(data.get("timezone") or "").strip()
+    if timezone_val and not validate_timezone(timezone_val):
+        raise HTTPException(status_code=400, detail=f"Invalid timezone: {timezone_val!r}")
+
+    command = data.get("command")
+    message = data.get("message")
+    task_type = data.get("task_type", "command")
+
+    job: dict[str, Any] = {
+        "name": name,
+        "schedule": schedule,
+        "enabled": bool(data.get("enabled", True)),
+    }
+
+    if timezone_val:
+        job["timezone"] = timezone_val
+
+    cwd = str(data.get("cwd") or ".").strip()
+    if cwd:
+        job["cwd"] = cwd
+
+    if task_type == "agent" and message:
+        payload: dict[str, Any] = {
+            "kind": "agent_turn",
+            "message": str(message),
+        }
+        profile = data.get("profile")
+        if profile:
+            payload["profile"] = str(profile)
+        job["payload"] = payload
+    elif command:
+        job["command"] = str(command)
+    else:
+        raise HTTPException(status_code=400, detail="Task requires either command or message")
+
+    # Notification config
+    notify_type = str(data.get("notify_type") or "").strip()
+    notify_target = str(data.get("notify_target") or "").strip()
+    if notify_type and notify_target:
+        notify: dict[str, Any] = {"type": notify_type}
+        if notify_type == "feishu_dm":
+            notify["user_open_id"] = notify_target
+        elif notify_type == "qq":
+            notify["open_id"] = notify_target
+        elif notify_type == "wechat":
+            notify["chat_id"] = notify_target
+        else:
+            raise HTTPException(status_code=400, detail=f"Unsupported notify type: {notify_type}")
+        job["notify"] = notify
+
+    upsert_cron_job(job)
+    return {"status": "ok", "name": name}
+
+
+@app.put("/api/cron/jobs/{job_name}")
+async def update_cron_job(job_name: str, data: dict[str, Any]):
+    """Update an existing cron job."""
+    from openharness.services.cron import get_cron_job, upsert_cron_job, validate_cron_expression, validate_timezone
+
+    existing = get_cron_job(job_name)
+    if existing is None:
+        raise HTTPException(status_code=404, detail=f"Job not found: {job_name}")
+
+    schedule = str(data.get("schedule") or existing.get("schedule") or "").strip()
+    if not validate_cron_expression(schedule):
+        raise HTTPException(status_code=400, detail=f"Invalid cron expression: {schedule!r}")
+
+    timezone_val = data.get("timezone", existing.get("timezone"))
+    if timezone_val and not validate_timezone(str(timezone_val)):
+        raise HTTPException(status_code=400, detail=f"Invalid timezone: {timezone_val!r}")
+
+    job: dict[str, Any] = {
+        "name": job_name,
+        "schedule": schedule,
+        "enabled": bool(data.get("enabled", existing.get("enabled", True))),
+        "created_at": existing.get("created_at"),
+    }
+
+    if timezone_val:
+        job["timezone"] = str(timezone_val)
+
+    cwd = data.get("cwd", existing.get("cwd"))
+    if cwd:
+        job["cwd"] = str(cwd)
+
+    task_type = data.get("task_type")
+    command = data.get("command")
+    message = data.get("message")
+
+    if task_type == "agent" or message is not None:
+        msg = message if message is not None else (existing.get("payload", {}).get("message") if isinstance(existing.get("payload"), dict) else "")
+        if msg:
+            payload: dict[str, Any] = {"kind": "agent_turn", "message": str(msg)}
+            profile = data.get("profile") or (existing.get("payload", {}).get("profile") if isinstance(existing.get("payload"), dict) else None)
+            if profile:
+                payload["profile"] = str(profile)
+            job["payload"] = payload
+        elif existing.get("payload"):
+            job["payload"] = existing["payload"]
+    elif command is not None:
+        job["command"] = str(command)
+    elif existing.get("command"):
+        job["command"] = existing["command"]
+    elif existing.get("payload"):
+        job["payload"] = existing["payload"]
+
+    # Notification
+    notify_type = data.get("notify_type")
+    notify_target = data.get("notify_target")
+    if notify_type is not None:
+        notify_type = str(notify_type).strip()
+        notify_target = str(notify_target or "").strip()
+        if notify_type and notify_target:
+            notify: dict[str, Any] = {"type": notify_type}
+            if notify_type == "feishu_dm":
+                notify["user_open_id"] = notify_target
+            elif notify_type == "qq":
+                notify["open_id"] = notify_target
+            elif notify_type == "wechat":
+                notify["chat_id"] = notify_target
+            else:
+                raise HTTPException(status_code=400, detail=f"Unsupported notify type: {notify_type}")
+            job["notify"] = notify
+        elif notify_type == "":
+            job.pop("notify", None)
+    elif existing.get("notify"):
+        job["notify"] = existing["notify"]
+
+    upsert_cron_job(job)
+    return {"status": "ok", "name": job_name}
+
+
+@app.delete("/api/cron/jobs/{job_name}")
+async def delete_cron_job(job_name: str):
+    """Delete a cron job."""
+    from openharness.services.cron import delete_cron_job as _delete
+
+    if not _delete(job_name):
+        raise HTTPException(status_code=404, detail=f"Job not found: {job_name}")
+    return {"status": "ok", "name": job_name}
+
+
+@app.post("/api/cron/jobs/{job_name}/toggle")
+async def toggle_cron_job(job_name: str):
+    """Enable or disable a cron job."""
+    from openharness.services.cron import get_cron_job, set_job_enabled
+
+    job = get_cron_job(job_name)
+    if job is None:
+        raise HTTPException(status_code=404, detail=f"Job not found: {job_name}")
+
+    new_enabled = not job.get("enabled", True)
+    set_job_enabled(job_name, new_enabled)
+    return {"status": "ok", "name": job_name, "enabled": new_enabled}
+
+
+@app.post("/api/cron/jobs/{job_name}/run")
+async def run_cron_job_now(job_name: str):
+    """Manually trigger a cron job immediately."""
+    import asyncio
+    from openharness.services.cron import get_cron_job
+    from openharness.services.cron_scheduler import execute_job
+
+    job = get_cron_job(job_name)
+    if job is None:
+        raise HTTPException(status_code=404, detail=f"Job not found: {job_name}")
+
+    try:
+        result = await execute_job(job)
+        return {"status": "ok", "result": result}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Execution failed: {str(e)}")
+
+
+@app.get("/api/cron/history")
+async def get_cron_history(job_name: str | None = None, limit: int = 50):
+    """Get cron execution history."""
+    from openharness.services.cron_scheduler import load_history
+
+    history = load_history(job_name=job_name, limit=min(limit, 200))
+    return {"history": history}
+
+
+@app.get("/api/cron/status")
+async def get_cron_status():
+    """Get cron scheduler status."""
+    from openharness.services.cron_scheduler import scheduler_status
+
+    return scheduler_status()
+
+
+@app.post("/api/cron/scheduler/start")
+async def start_cron_scheduler():
+    """Start the cron scheduler daemon."""
+    from openharness.services.cron_scheduler import start_daemon
+
+    try:
+        pid = start_daemon()
+        return {"status": "ok", "pid": pid}
+    except RuntimeError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/api/cron/scheduler/stop")
+async def stop_cron_scheduler():
+    """Stop the cron scheduler daemon."""
+    from openharness.services.cron_scheduler import stop_scheduler
+
+    if stop_scheduler():
+        return {"status": "ok"}
+    raise HTTPException(status_code=400, detail="Scheduler is not running")
+
+
+@app.get("/api/cron/presets")
+async def get_cron_presets():
+    """Get common cron expression presets."""
+    return {
+        "presets": [
+            {"label": "每1分钟", "value": "* * * * *"},
+            {"label": "每5分钟", "value": "*/5 * * * *"},
+            {"label": "每10分钟", "value": "*/10 * * * *"},
+            {"label": "每30分钟", "value": "*/30 * * * *"},
+            {"label": "每小时", "value": "0 * * * *"},
+            {"label": "每6小时", "value": "0 */6 * * *"},
+            {"label": "每天 0:00", "value": "0 0 * * *"},
+            {"label": "每天 9:00", "value": "0 9 * * *"},
+            {"label": "工作日 9:00", "value": "0 9 * * 1-5"},
+            {"label": "每周一 9:00", "value": "0 9 * * 1"},
+            {"label": "每月1号 0:00", "value": "0 0 1 * *"},
+        ]
+    }

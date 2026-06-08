@@ -554,6 +554,10 @@
             <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
             <span class="truncate">Web Search 搜索</span>
           </button>
+          <button onclick="switchSubView('cron')" class="sub-nav-btn" data-subview="cron">
+            <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+            <span class="truncate">Cron 定时任务</span>
+          </button>
         </nav>
       </div>
       <!-- Chat Submenu (History List) -->
@@ -1120,6 +1124,156 @@
           </div>
         </div>
 
+        <!-- Cron View -->
+        <div id="viewCron" class="hidden space-y-6">
+          <!-- Scheduler Status -->
+          <div class="form-card">
+            <div class="flex items-center justify-between">
+              <div class="flex items-center gap-3">
+                <div class="w-8 h-8 rounded-lg bg-accent-purple/10 flex items-center justify-center">
+                  <svg class="w-4 h-4 text-accent-purple" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                </div>
+                <div>
+                  <h3 class="text-base font-semibold text-text-primary">Cron 定时任务</h3>
+                  <p class="text-xs text-text-muted">配置和管理定时任务</p>
+                </div>
+              </div>
+              <div class="flex items-center gap-3">
+                <div id="cronSchedulerStatus" class="flex items-center gap-2 text-xs">
+                  <span class="status-dot w-2 h-2 rounded-full bg-red-500"></span>
+                  <span class="text-text-muted">调度器未运行</span>
+                </div>
+                <button onclick="toggleCronScheduler()" id="cronSchedulerBtn" class="btn-secondary text-xs px-3 py-1.5">启动</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Job List -->
+          <div class="form-card">
+            <div class="flex items-center justify-between mb-4">
+              <h3 class="text-sm font-semibold text-text-primary">任务列表</h3>
+              <button onclick="showCronCreateForm()" class="btn-primary text-xs px-3 py-1.5">
+                <svg class="w-3 h-3 mr-1 inline" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+                新建任务
+              </button>
+            </div>
+            <div id="cronJobList" class="space-y-3">
+              <div class="text-sm text-text-muted">加载中...</div>
+            </div>
+          </div>
+
+          <!-- Create/Edit Form (hidden by default) -->
+          <div id="cronFormCard" class="form-card hidden">
+            <div class="flex items-center justify-between mb-4">
+              <h3 id="cronFormTitle" class="text-sm font-semibold text-text-primary">新建任务</h3>
+              <button onclick="hideCronForm()" class="nav-icon-btn">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+              </button>
+            </div>
+            <form id="cronForm" onsubmit="saveCronJob(event)" class="space-y-4">
+              <input type="hidden" id="cronEditName" value="">
+              <div class="grid grid-cols-2 gap-4">
+                <div class="form-item">
+                  <label class="form-label">任务名称 *</label>
+                  <input type="text" id="cronJobName" class="form-input" placeholder="如: daily-report" required>
+                </div>
+                <div class="form-item">
+                  <label class="form-label">时区</label>
+                  <select id="cronTimezone" class="form-input">
+                    <option value="">UTC (默认)</option>
+                    <option value="Asia/Shanghai">Asia/Shanghai (UTC+8)</option>
+                    <option value="America/New_York">America/New_York (UTC-5)</option>
+                    <option value="Europe/London">Europe/London (UTC+0)</option>
+                    <option value="Asia/Tokyo">Asia/Tokyo (UTC+9)</option>
+                  </select>
+                </div>
+              </div>
+
+              <div class="form-item">
+                <label class="form-label">触发频率 (Cron 表达式) *</label>
+                <div class="flex gap-2">
+                  <input type="text" id="cronSchedule" class="form-input flex-1" placeholder="*/5 * * * *" required>
+                  <select id="cronPreset" class="form-input" style="max-width: 180px;" onchange="applyCronPreset()">
+                    <option value="">常用预设</option>
+                  </select>
+                </div>
+                <p class="text-xs text-text-muted mt-1">格式: 分 时 日 月 星期，如 <code class="text-accent-green">*/5 * * * *</code> 表示每5分钟</p>
+              </div>
+
+              <div class="form-item">
+                <label class="form-label">工作目录</label>
+                <input type="text" id="cronCwd" class="form-input" placeholder="留空使用当前目录">
+              </div>
+
+              <div class="form-item">
+                <label class="form-label">任务类型</label>
+                <div class="flex gap-4">
+                  <label class="flex items-center gap-2 cursor-pointer">
+                    <input type="radio" name="cronTaskType" value="command" checked onchange="toggleCronTaskType()" class="accent-accent-green">
+                    <span class="text-sm text-text-primary">Shell 命令</span>
+                  </label>
+                  <label class="flex items-center gap-2 cursor-pointer">
+                    <input type="radio" name="cronTaskType" value="agent" onchange="toggleCronTaskType()" class="accent-accent-green">
+                    <span class="text-sm text-text-primary">AI Agent 指令</span>
+                  </label>
+                </div>
+              </div>
+
+              <div id="cronCommandGroup" class="form-item">
+                <label class="form-label">Shell 命令 *</label>
+                <textarea id="cronCommand" class="form-input" rows="3" placeholder="echo 'hello'"></textarea>
+              </div>
+
+              <div id="cronAgentGroup" class="form-item hidden">
+                <label class="form-label">AI 指令 *</label>
+                <textarea id="cronMessage" class="form-input" rows="3" placeholder="如: 检查 GitHub 是否有新的 issue 并总结"></textarea>
+                <div class="form-item mt-2">
+                  <label class="form-label">Provider Profile (可选)</label>
+                  <input type="text" id="cronProfile" class="form-input" placeholder="留空使用默认 profile">
+                </div>
+              </div>
+
+              <div class="border-t border-dark-border pt-4">
+                <h4 class="text-sm font-medium text-text-primary mb-3">通知推送 (可选)</h4>
+                <div class="grid grid-cols-2 gap-4">
+                  <div class="form-item">
+                    <label class="form-label">推送渠道</label>
+                    <select id="cronNotifyType" class="form-input" onchange="toggleCronNotify()">
+                      <option value="">不推送</option>
+                      <option value="feishu_dm">飞书私聊</option>
+                      <option value="qq">QQ 私聊</option>
+                      <option value="wechat">微信</option>
+                    </select>
+                  </div>
+                  <div class="form-item">
+                    <label class="form-label">目标用户/群 ID</label>
+                    <input type="text" id="cronNotifyTarget" class="form-input" placeholder="如: ou_xxx (飞书 open_id)">
+                  </div>
+                </div>
+              </div>
+
+              <div class="flex gap-2 pt-2">
+                <button type="submit" class="btn-primary">保存</button>
+                <button type="button" onclick="hideCronForm()" class="btn-secondary">取消</button>
+              </div>
+            </form>
+          </div>
+
+          <!-- History -->
+          <div class="form-card">
+            <div class="flex items-center justify-between mb-4">
+              <h3 class="text-sm font-semibold text-text-primary">执行历史</h3>
+              <button onclick="loadCronHistory()" class="btn-secondary text-xs px-3 py-1.5">
+                <svg class="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+                刷新
+              </button>
+            </div>
+            <div id="cronHistoryList" class="space-y-2 max-h-96 overflow-y-auto">
+              <div class="text-sm text-text-muted">暂无执行记录</div>
+            </div>
+          </div>
+        </div>
+
         <!-- Tools View -->
         <div id="viewTools" class="hidden space-y-6">
           <div class="form-card">
@@ -1331,6 +1485,7 @@
       document.getElementById('viewSessions').classList.toggle('hidden', view !== 'sessions');
       document.getElementById('viewTasks').classList.toggle('hidden', view !== 'tasks');
       document.getElementById('viewWebsearch').classList.toggle('hidden', view !== 'websearch');
+      document.getElementById('viewCron').classList.toggle('hidden', view !== 'cron');
       document.getElementById('viewTools').classList.toggle('hidden', view !== 'tools');
       if (view === 'agents') loadAgents();
       if (view === 'skills') loadSkills();
@@ -1342,6 +1497,7 @@
       if (view === 'tasks') loadTasks();
       if (view === 'websearch') loadWebSearchSettings();
       if (view === 'tools') loadTools();
+      if (view === 'cron') loadCronJobs();
     }
 
     // Data Loading
@@ -5033,6 +5189,305 @@
 	    function filterTools() {
 	      renderTools();
 	    }
+
+    // Cron Functions
+    async function loadCronJobs() {
+      try {
+        const [jobsRes, presetsRes] = await Promise.all([
+          fetch('/api/cron/jobs'),
+          fetch('/api/cron/presets')
+        ]);
+        const jobsData = await jobsRes.json();
+        const presetsData = await presetsRes.json();
+
+        // Update scheduler status
+        const statusEl = document.getElementById('cronSchedulerStatus');
+        const btnEl = document.getElementById('cronSchedulerBtn');
+        if (jobsData.scheduler_running) {
+          statusEl.innerHTML = '<span class="status-dot w-2 h-2 rounded-full bg-accent-green"></span><span class="text-accent-green">调度器运行中 (pid=' + jobsData.scheduler_pid + ')</span>';
+          btnEl.textContent = '停止';
+          btnEl.onclick = () => toggleCronScheduler();
+        } else {
+          statusEl.innerHTML = '<span class="status-dot w-2 h-2 rounded-full bg-red-500"></span><span class="text-text-muted">调度器未运行</span>';
+          btnEl.textContent = '启动';
+          btnEl.onclick = () => toggleCronScheduler();
+        }
+
+        // Populate presets
+        const presetSelect = document.getElementById('cronPreset');
+        presetSelect.innerHTML = '<option value="">常用预设</option>';
+        (presetsData.presets || []).forEach(p => {
+          const opt = document.createElement('option');
+          opt.value = p.value;
+          opt.textContent = p.label;
+          presetSelect.appendChild(opt);
+        });
+
+        // Render job list
+        const listEl = document.getElementById('cronJobList');
+        const jobs = jobsData.jobs || [];
+        if (jobs.length === 0) {
+          listEl.innerHTML = '<div class="text-sm text-text-muted">暂无定时任务，点击"新建任务"创建</div>';
+          return;
+        }
+
+        listEl.innerHTML = jobs.map(job => {
+          const enabled = job.enabled !== false;
+          const schedule = job.schedule || '';
+          const taskType = job.payload ? 'agent' : 'command';
+          const taskDesc = job.payload ? (job.payload.message || '').substring(0, 60) : (job.command || '').substring(0, 60);
+          const notify = job.notify;
+          const notifyStr = notify ? ` | 推送: ${notify.type}` : '';
+          const lastRun = job.last_run ? job.last_run.substring(0, 19).replace('T', ' ') : '从未';
+          const lastStatus = job.last_status ? (job.last_status === 'success' ? '<span class="text-accent-green">成功</span>' : '<span class="text-red-400">失败</span>') : '';
+          const nextRun = job.next_run ? job.next_run.substring(0, 19).replace('T', ' ') : '-';
+
+          return '<div class="bg-dark-bg-secondary border border-dark-border rounded-lg p-4 hover:border-dark-border-light transition-colors">' +
+            '<div class="flex items-center justify-between">' +
+              '<div class="flex-1 min-w-0">' +
+                '<div class="flex items-center gap-2 mb-1">' +
+                  '<span class="text-sm font-medium text-text-primary">' + escapeHtml(job.name) + '</span>' +
+                  '<span class="text-xs px-2 py-0.5 rounded ' + (enabled ? 'bg-accent-green/10 text-accent-green' : 'bg-dark-border text-text-muted') + '">' + (enabled ? '启用' : '禁用') + '</span>' +
+                  '<span class="text-xs px-2 py-0.5 rounded bg-accent-purple/10 text-accent-purple">' + (taskType === 'agent' ? 'AI Agent' : 'Shell') + '</span>' +
+                '</div>' +
+                '<div class="text-xs text-text-muted font-mono">' + escapeHtml(schedule) + notifyStr + '</div>' +
+                '<div class="text-xs text-text-secondary mt-1 truncate">' + escapeHtml(taskDesc) + '</div>' +
+              '</div>' +
+              '<div class="flex items-center gap-1 ml-4 shrink-0">' +
+                '<button onclick="runCronJobNow(\'' + escapeAttr(job.name) + '\')" class="nav-icon-btn" title="立即执行">' +
+                  '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>' +
+                '</button>' +
+                '<button onclick="editCronJob(\'' + escapeAttr(job.name) + '\')" class="nav-icon-btn" title="编辑">' +
+                  '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>' +
+                '</button>' +
+                '<button onclick="toggleCronJob(\'' + escapeAttr(job.name) + '\')" class="nav-icon-btn" title="' + (enabled ? '禁用' : '启用') + '">' +
+                  '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="' + (enabled ? 'M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636' : 'M18.364 5.636a9 9 0 010 12.728M5.636 18.364a9 9 0 010-12.728m12.728 12.728L5.636 5.636') + '"/></svg>' +
+                '</button>' +
+                '<button onclick="deleteCronJob(\'' + escapeAttr(job.name) + '\')" class="nav-icon-btn" title="删除">' +
+                  '<svg class="w-4 h-4 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>' +
+                '</button>' +
+              '</div>' +
+            '</div>' +
+            '<div class="flex gap-4 mt-2 text-xs text-text-muted">' +
+              '<span>上次: ' + lastRun + ' ' + lastStatus + '</span>' +
+              '<span>下次: ' + nextRun + '</span>' +
+            '</div>' +
+          '</div>';
+        }).join('');
+
+        // Load history too
+        loadCronHistory();
+      } catch (e) {
+        document.getElementById('cronJobList').innerHTML = '<div class="text-sm text-red-400">加载失败: ' + escapeHtml(e.message) + '</div>';
+      }
+    }
+
+    function showCronCreateForm() {
+      document.getElementById('cronFormTitle').textContent = '新建任务';
+      document.getElementById('cronEditName').value = '';
+      document.getElementById('cronJobName').value = '';
+      document.getElementById('cronJobName').disabled = false;
+      document.getElementById('cronSchedule').value = '';
+      document.getElementById('cronTimezone').value = '';
+      document.getElementById('cronCwd').value = '';
+      document.getElementById('cronCommand').value = '';
+      document.getElementById('cronMessage').value = '';
+      document.getElementById('cronProfile').value = '';
+      document.getElementById('cronNotifyType').value = '';
+      document.getElementById('cronNotifyTarget').value = '';
+      document.querySelector('input[name="cronTaskType"][value="command"]').checked = true;
+      toggleCronTaskType();
+      toggleCronNotify();
+      document.getElementById('cronFormCard').classList.remove('hidden');
+    }
+
+    function hideCronForm() {
+      document.getElementById('cronFormCard').classList.add('hidden');
+    }
+
+    async function editCronJob(name) {
+      try {
+        const res = await fetch('/api/cron/jobs');
+        const data = await res.json();
+        const job = (data.jobs || []).find(j => j.name === name);
+        if (!job) { alert('任务不存在'); return; }
+
+        document.getElementById('cronFormTitle').textContent = '编辑任务';
+        document.getElementById('cronEditName').value = name;
+        document.getElementById('cronJobName').value = name;
+        document.getElementById('cronJobName').disabled = true;
+        document.getElementById('cronSchedule').value = job.schedule || '';
+        document.getElementById('cronTimezone').value = job.timezone || '';
+        document.getElementById('cronCwd').value = job.cwd || '';
+
+        const isAgent = !!job.payload;
+        document.querySelector('input[name="cronTaskType"][value="' + (isAgent ? 'agent' : 'command') + '"]').checked = true;
+        toggleCronTaskType();
+
+        if (isAgent) {
+          document.getElementById('cronMessage').value = (job.payload.message) || '';
+          document.getElementById('cronProfile').value = (job.payload.profile) || '';
+        } else {
+          document.getElementById('cronCommand').value = job.command || '';
+        }
+
+        const notify = job.notify || {};
+        document.getElementById('cronNotifyType').value = notify.type || '';
+        document.getElementById('cronNotifyTarget').value = notify.user_open_id || notify.open_id || notify.chat_id || '';
+        toggleCronNotify();
+
+        document.getElementById('cronFormCard').classList.remove('hidden');
+      } catch (e) {
+        alert('加载任务失败: ' + e.message);
+      }
+    }
+
+    async function saveCronJob(e) {
+      e.preventDefault();
+      const editName = document.getElementById('cronEditName').value;
+      const data = {
+        name: document.getElementById('cronJobName').value,
+        schedule: document.getElementById('cronSchedule').value,
+        timezone: document.getElementById('cronTimezone').value,
+        cwd: document.getElementById('cronCwd').value,
+        task_type: document.querySelector('input[name="cronTaskType"]:checked').value,
+        command: document.getElementById('cronCommand').value,
+        message: document.getElementById('cronMessage').value,
+        profile: document.getElementById('cronProfile').value,
+        notify_type: document.getElementById('cronNotifyType').value,
+        notify_target: document.getElementById('cronNotifyTarget').value,
+      };
+
+      try {
+        const url = editName ? '/api/cron/jobs/' + encodeURIComponent(editName) : '/api/cron/jobs';
+        const method = editName ? 'PUT' : 'POST';
+        const res = await fetch(url, {
+          method: method,
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify(data)
+        });
+        const result = await res.json();
+        if (!res.ok) { alert('保存失败: ' + (result.detail || '未知错误')); return; }
+        hideCronForm();
+        loadCronJobs();
+      } catch (e) {
+        alert('保存失败: ' + e.message);
+      }
+    }
+
+    async function deleteCronJob(name) {
+      if (!confirm('确定删除任务 "' + name + '" 吗?')) return;
+      try {
+        const res = await fetch('/api/cron/jobs/' + encodeURIComponent(name), {method: 'DELETE'});
+        if (!res.ok) { const d = await res.json(); alert('删除失败: ' + (d.detail || '未知错误')); return; }
+        loadCronJobs();
+      } catch (e) {
+        alert('删除失败: ' + e.message);
+      }
+    }
+
+    async function toggleCronJob(name) {
+      try {
+        const res = await fetch('/api/cron/jobs/' + encodeURIComponent(name) + '/toggle', {method: 'POST'});
+        if (!res.ok) { const d = await res.json(); alert('操作失败: ' + (d.detail || '未知错误')); return; }
+        loadCronJobs();
+      } catch (e) {
+        alert('操作失败: ' + e.message);
+      }
+    }
+
+    async function runCronJobNow(name) {
+      if (!confirm('确定立即执行任务 "' + name + '" 吗?')) return;
+      try {
+        const res = await fetch('/api/cron/jobs/' + encodeURIComponent(name) + '/run', {method: 'POST'});
+        const result = await res.json();
+        if (!res.ok) { alert('执行失败: ' + (result.detail || '未知错误')); return; }
+        alert('任务已执行，状态: ' + (result.result?.status || '未知'));
+        loadCronJobs();
+      } catch (e) {
+        alert('执行失败: ' + e.message);
+      }
+    }
+
+    async function toggleCronScheduler() {
+      const statusEl = document.getElementById('cronSchedulerStatus');
+      try {
+        // Check current status first
+        const res = await fetch('/api/cron/status');
+        const status = await res.json();
+        const isRunning = status.running;
+
+        if (isRunning) {
+          const stopRes = await fetch('/api/cron/scheduler/stop', {method: 'POST'});
+          if (!stopRes.ok) { const d = await stopRes.json(); alert('停止失败: ' + (d.detail || '未知错误')); return; }
+        } else {
+          const startRes = await fetch('/api/cron/scheduler/start', {method: 'POST'});
+          if (!startRes.ok) { const d = await startRes.json(); alert('启动失败: ' + (d.detail || '未知错误')); return; }
+        }
+        loadCronJobs();
+      } catch (e) {
+        alert('操作失败: ' + e.message);
+      }
+    }
+
+    async function loadCronHistory() {
+      try {
+        const res = await fetch('/api/cron/history?limit=50');
+        const data = await res.json();
+        const listEl = document.getElementById('cronHistoryList');
+        const history = data.history || [];
+        if (history.length === 0) {
+          listEl.innerHTML = '<div class="text-sm text-text-muted">暂无执行记录</div>';
+          return;
+        }
+        listEl.innerHTML = history.map(entry => {
+          const status = entry.status || '?';
+          const statusColor = status === 'success' ? 'text-accent-green' : (status === 'timeout' ? 'text-accent-amber' : 'text-red-400');
+          const time = (entry.started_at || '').substring(0, 19).replace('T', ' ');
+          const duration = entry.started_at && entry.ended_at ?
+            Math.round((new Date(entry.ended_at) - new Date(entry.started_at)) / 1000) + 's' : '';
+          const output = (entry.stdout || entry.stderr || '').substring(0, 200);
+          return '<div class="bg-dark-bg-secondary border border-dark-border rounded-lg p-3">' +
+            '<div class="flex items-center gap-2 text-xs mb-1">' +
+              '<span class="font-medium text-text-primary">' + escapeHtml(entry.name) + '</span>' +
+              '<span class="' + statusColor + '">' + escapeHtml(status) + '</span>' +
+              '<span class="text-text-muted">' + time + '</span>' +
+              '<span class="text-text-muted">' + duration + '</span>' +
+              '<span class="text-text-muted">rc=' + (entry.returncode ?? '?') + '</span>' +
+            '</div>' +
+            (output ? '<div class="text-xs text-text-muted font-mono truncate">' + escapeHtml(output) + '</div>' : '') +
+          '</div>';
+        }).join('');
+      } catch (e) {
+        document.getElementById('cronHistoryList').innerHTML = '<div class="text-sm text-red-400">加载失败: ' + escapeHtml(e.message) + '</div>';
+      }
+    }
+
+    function applyCronPreset() {
+      const val = document.getElementById('cronPreset').value;
+      if (val) document.getElementById('cronSchedule').value = val;
+    }
+
+    function toggleCronTaskType() {
+      const type = document.querySelector('input[name="cronTaskType"]:checked').value;
+      document.getElementById('cronCommandGroup').classList.toggle('hidden', type !== 'command');
+      document.getElementById('cronAgentGroup').classList.toggle('hidden', type !== 'agent');
+    }
+
+    function toggleCronNotify() {
+      const val = document.getElementById('cronNotifyType').value;
+      document.getElementById('cronNotifyTarget').parentElement.classList.toggle('hidden', !val);
+    }
+
+    function escapeHtml(str) {
+      if (!str) return '';
+      return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+
+    function escapeAttr(str) {
+      if (!str) return '';
+      return String(str).replace(/'/g, "\\'").replace(/"/g, '&quot;');
+    }
 
     // Init
     document.addEventListener('DOMContentLoaded', () => {

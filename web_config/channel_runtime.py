@@ -80,6 +80,7 @@ class WebConfigSmartChannelBridge:
         create_engine_for_agent,
         get_channel_sessions,
         resolve_agent_name,
+        set_agent_assignment=None,
     ) -> None:
         self._engine = engine
         self._bus = bus
@@ -90,6 +91,7 @@ class WebConfigSmartChannelBridge:
         self._create_engine_for_agent = create_engine_for_agent
         self._get_channel_sessions = get_channel_sessions
         self._resolve_agent_name = resolve_agent_name
+        self._set_agent_assignment = set_agent_assignment
         self._agent_engines: dict[str, "QueryEngine"] = {}
         self._states: dict[str, dict[str, Any]] = {}
         self._messages_by_id: dict[str, dict[str, Any]] = {}
@@ -732,6 +734,10 @@ class WebConfigSmartChannelBridge:
         如果不是已知命令，返回 None，让消息继续走正常的 LLM 处理流程。
         """
         try:
+            # 先处理 /agent 命令（渠道 agent 切换，不在标准注册表中）
+            if content.startswith("/agent"):
+                return await self._handle_agent_slash_command(msg, content)
+            
             from openharness.commands.registry import create_default_command_registry, CommandContext
             
             # 创建命令注册表
@@ -783,6 +789,129 @@ class WebConfigSmartChannelBridge:
         except Exception as e:
             logger.exception("Failed to handle slash command: %s", content)
             return f"执行命令时出错：{str(e)}"
+
+    async def _handle_agent_slash_command(self, msg: InboundMessage, content: str) -> str:
+        """处理 /agent 命令，用于切换当前渠道使用的 agent。
+        
+        用法：
+          /agent          - 查看当前渠道使用的 agent
+          /agent <名称>   - 切换到指定名称的 agent
+          /agent list     - 列出所有可用的 agent
+        """
+        channel_name = msg.channel
+        
+        # 加载 agents 列表
+        try:
+            from openharness.config.paths import get_config_dir
+            agents_path = get_config_dir() / "agents.json"
+            if agents_path.exists():
+                agents_data = json.loads(agents_path.read_text(encoding="utf-8"))
+            else:
+                agents_data = {"agents": [], "active_agent_id": None}
+        except Exception:
+            logger.exception("Failed to load agents list")
+            return "加载 agent 列表失败。"
+        
+        agents = agents_data.get("agents", [])
+        if not isinstance(agents, list):
+            agents = []
+        
+        # 获取当前渠道的 agent 分配
+        assignments = self._load_bot_agent_assignments()
+        current_agent_id = assignments.get(channel_name)
+        
+        # 解析命令参数
+        parts = content.strip().split(None, 1)
+        if len(parts) == 1:
+            # /agent - 显示当前 agent
+            if current_agent_id:
+                agent_name = self._resolve_agent_name(current_agent_id) if self._resolve_agent_name else current_agent_id
+                return f"当前 {channel_name} 渠道使用的 agent: {agent_name}"
+            else:
+                return f"当前 {channel_name} 渠道未指定 agent，使用默认 agent。"
+        
+        arg = parts[1].strip()
+        
+        if arg.lower() == "list":
+            # /agent list - 列出所有 agent
+            if not agents:
+                return "当前没有配置任何 agent。"
+            lines = ["可用的 agent："]
+            for agent in agents:
+                aid = agent.get("id", "?")
+                aname = agent.get("name", "?")
+                is_current = " (当前)" if aid == current_agent_id else ""
+                lines.append(f"  - {aname} ({aid}){is_current}")
+            return "\n".join(lines)
+        
+        # /agent <名称或ID> - 切换 agent
+        # 先按名称查找，再按 ID 查找
+        target_agent = None
+        for agent in agents:
+            if agent.get("name") == arg or agent.get("id") == arg:
+                target_agent = agent
+                break
+        
+        if target_agent is None:
+            # 尝试模糊匹配名称
+            matches = [a for a in agents if arg.lower() in (a.get("name") or "").lower()]
+            if len(matches) == 1:
+                target_agent = matches[0]
+            elif len(matches) > 1:
+                names = ", ".join(a.get("name", "?") for a in matches)
+                return f"找到多个匹配的 agent: {names}。请使用完整名称。"
+            else:
+                return f"未找到名称或 ID 为 '{arg}' 的 agent。使用 /agent list 查看所有可用 agent。"
+        
+        target_id = target_agent.get("id")
+        target_name = target_agent.get("name", target_id)
+        
+        # 更新内存中的分配
+        if self._set_agent_assignment:
+            self._set_agent_assignment(channel_name, target_id)
+        
+        # 清除该渠道的 engine 缓存，下次消息会使用新 agent
+        self._agent_engines.pop(channel_name, None)
+        
+        # 持久化到 settings 文件
+        try:
+            from openharness.config.paths import get_config_file_path
+            from openharness.utils.file_lock import exclusive_file_lock
+            from openharness.utils.fs import atomic_write_text
+            
+            config_path = get_config_file_path()
+            if config_path.exists():
+                data = json.loads(config_path.read_text(encoding="utf-8"))
+            else:
+                data = {}
+            
+            # 更新 bot_agent_assignments
+            if "bot_agent_assignments" not in data or not isinstance(data.get("bot_agent_assignments"), dict):
+                data["bot_agent_assignments"] = {}
+            data["bot_agent_assignments"][channel_name] = target_id
+            
+            content_str = json.dumps(data, indent=2, ensure_ascii=False)
+            with exclusive_file_lock(config_path):
+                atomic_write_text(config_path, content_str)
+        except Exception:
+            logger.exception("Failed to persist bot_agent_assignments")
+            # 内存中已更新，持久化失败不影响使用
+        
+        return f"已将 {channel_name} 渠道的 agent 切换为: {target_name}"
+
+    def _load_bot_agent_assignments(self) -> dict[str, str]:
+        """从配置文件加载 bot_agent_assignments。"""
+        try:
+            from openharness.config.paths import get_config_file_path
+            config_path = get_config_file_path()
+            if config_path.exists():
+                data = json.loads(config_path.read_text(encoding="utf-8"))
+                assignments = data.get("bot_agent_assignments", {})
+                if isinstance(assignments, dict):
+                    return assignments
+        except Exception:
+            logger.exception("Failed to load bot_agent_assignments")
+        return {}
 
     def _normalize_inbound_media_paths(self, msg: InboundMessage, media: list[str]) -> list[str]:
         normalized: list[str] = []
@@ -2091,6 +2220,7 @@ class WebConfigChannelRuntime:
                 create_engine_for_agent=create_engine_for_agent,
                 get_channel_sessions=get_channel_sessions,
                 resolve_agent_name=resolve_agent_name,
+                set_agent_assignment=self.set_bot_agent_assignment,
             )
             await self._bridge.start()
         except BaseException as exc:
