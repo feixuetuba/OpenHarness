@@ -570,6 +570,110 @@ async def start_runtime(bundle: RuntimeBundle) -> None:
     )
 
 
+async def _maybe_inject_introspection_experiences(
+    bundle: RuntimeBundle,
+    system_prompt: str,
+    latest_user_prompt: str = "",
+) -> str:
+    """Attempt to retrieve and inject introspection experiences into the system prompt."""
+    if not latest_user_prompt.strip():
+        return system_prompt
+    try:
+        from openharness.introspection.config import IntrospectionConfig
+        from openharness.introspection.engine import IntrospectionEngine
+
+        config = IntrospectionConfig.from_settings(bundle.current_settings())
+        if not config.enabled or config.injection_mode == "off":
+            return system_prompt
+
+        engine = IntrospectionEngine(
+            cwd=bundle.cwd,
+            config=config,
+            api_client=bundle.api_client,
+            default_model=bundle.engine.model,
+        )
+
+        experiences = await engine.retrieve_experiences(latest_user_prompt)
+        if experiences:
+            injection = engine.format_experiences_for_prompt(experiences, latest_user_prompt)
+            if injection:
+                return f"{system_prompt}\n\n{injection}"
+    except Exception:
+        pass
+    return system_prompt
+
+
+async def _run_introspection_reflection(bundle: RuntimeBundle) -> None:
+    """Run introspection reflection after session ends when explicitly enabled."""
+    from openharness.introspection.config import IntrospectionConfig
+    from openharness.introspection.engine import IntrospectionEngine
+    from openharness.introspection.sources import source_from_interactive_session
+
+    try:
+        config = IntrospectionConfig.from_settings(bundle.current_settings())
+        if not config.enabled or not config.auto_reflect:
+            return
+
+        engine = IntrospectionEngine(
+            cwd=bundle.cwd,
+            config=config,
+            api_client=bundle.api_client,
+            default_model=bundle.engine.model,
+            hook_executor=bundle.hook_executor,
+        )
+
+        # Build source from current session
+        usage = {}
+        total_usage = bundle.engine.total_usage
+        if total_usage:
+            usage["total_tokens"] = getattr(total_usage, "total_tokens", 0)
+
+        # Build tool events from message history. Prefer actual tool results so
+        # success/error analysis is based on observed outcomes.
+        tool_uses_by_id: dict[str, ToolUseBlock] = {}
+        result_ids: set[str] = set()
+        tool_events = []
+        for msg in bundle.engine.messages:
+            if hasattr(msg, "tool_uses") and msg.tool_uses:
+                for tu in msg.tool_uses:
+                    tool_uses_by_id[tu.id] = tu
+            if hasattr(msg, "content"):
+                for block in msg.content:
+                    if isinstance(block, ToolResultBlock):
+                        result_ids.add(block.tool_use_id)
+                        tu = tool_uses_by_id.get(block.tool_use_id)
+                        tool_name = tu.name if tu is not None else "unknown"
+                        tool_events.append({
+                            "tool_name": tool_name,
+                            "success": not block.is_error,
+                            "error": block.content[:200] if block.is_error else None,
+                        })
+        for tool_use_id, tu in tool_uses_by_id.items():
+            if tool_use_id not in result_ids:
+                tool_events.append({
+                    "tool_name": tu.name,
+                    "success": False,
+                    "error": "tool call did not produce a result",
+                })
+
+        source = source_from_interactive_session(
+            session_id=bundle.session_id,
+            cwd=bundle.cwd,
+            messages=[m.model_dump(mode="json") for m in bundle.engine.messages[-20:]],  # Last 20 messages
+            tool_events=tool_events,
+            usage=usage,
+            metadata={"outcome": "unknown"},
+        )
+
+        await engine.reflect_on_session(source)
+
+    except Exception as exc:
+        import logging
+        logging.getLogger("openharness.introspection.engine").warning(
+            "Failed to run introspection: %s", exc
+        )
+
+
 async def close_runtime(bundle: RuntimeBundle) -> None:
     """Close runtime-owned resources."""
     from openharness.sandbox.session import stop_docker_sandbox
@@ -587,6 +691,10 @@ async def close_runtime(bundle: RuntimeBundle) -> None:
         HookEvent.SESSION_END,
         {"cwd": bundle.cwd, "event": HookEvent.SESSION_END.value},
     )
+
+    # Reflect before closing the API client so enabled LLM-backed reflection can run.
+    await _run_introspection_reflection(bundle)
+
     close_api_client = getattr(bundle.api_client, "close", None)
     if close_api_client is not None:
         await close_api_client()
@@ -765,6 +873,7 @@ async def handle_line(
                 extra_plugin_roots=bundle.extra_plugin_roots,
                 include_project_memory=bundle.include_project_memory,
             )
+            system_prompt = await _maybe_inject_introspection_experiences(bundle, system_prompt, submit_prompt)
             bundle.engine.set_system_prompt(system_prompt)
             try:
                 async for event in bundle.engine.submit_message(submit_prompt):
@@ -798,6 +907,7 @@ async def handle_line(
                 extra_plugin_roots=bundle.extra_plugin_roots,
                 include_project_memory=bundle.include_project_memory,
             )
+            system_prompt = await _maybe_inject_introspection_experiences(bundle, system_prompt)
             bundle.engine.set_system_prompt(system_prompt)
             turns = result.continue_turns if result.continue_turns is not None else bundle.engine.max_turns
             try:
@@ -832,6 +942,7 @@ async def handle_line(
         extra_plugin_roots=bundle.extra_plugin_roots,
         include_project_memory=bundle.include_project_memory,
     )
+    system_prompt = await _maybe_inject_introspection_experiences(bundle, system_prompt, latest_user_prompt)
     bundle.engine.set_system_prompt(system_prompt)
     try:
         async for event in bundle.engine.submit_message(user_message or line):

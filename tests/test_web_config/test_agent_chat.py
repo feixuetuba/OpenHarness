@@ -21,8 +21,10 @@ class _FakeEngine:
             ConversationMessage(role="assistant", content=[TextBlock(text="world")]),
         ]
 
-    async def submit_message(self, message: str):
-        assert message == "hello"
+    async def submit_message(self, message: str | ConversationMessage):
+        assert isinstance(message, ConversationMessage)
+        assert "hello" in message.text
+        assert "Web output requirements" in message.text
         yield AssistantTextDelta(text="world")
         yield AssistantTurnComplete(message=self.messages[-1], usage=UsageSnapshot())
 

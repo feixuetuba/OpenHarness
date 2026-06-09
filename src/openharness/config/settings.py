@@ -74,6 +74,38 @@ class MemorySettings(BaseModel):
     auto_dream_min_sessions: int = 5
 
 
+class IntrospectionSourceSettings(BaseModel):
+    """Enabled learning sources for introspection."""
+
+    interactive: bool = True
+    bot_chat: bool = True
+    cron: bool = True
+    remote_trigger: bool = True
+    subtask: bool = False
+
+
+class IntrospectionSettings(BaseModel):
+    """Introspection system configuration."""
+
+    enabled: bool = False
+    auto_reflect: bool = False
+    max_experiences: int = 1000
+    experience_ttl_days: int = 90
+    min_confidence_threshold: float = 0.7
+    top_k_experiences: int = 5
+    reflection_model: str = ""
+    reflection_timeout_seconds: float = 60.0
+    async_reflection: bool = True
+    store_backend: str = "memory"
+    sources: IntrospectionSourceSettings = Field(default_factory=IntrospectionSourceSettings)
+    log_level: str = "INFO"
+    web_logs_enabled: bool = True
+    web_log_retention_days: int = 30
+    web_log_debug_preview: bool = False
+    min_tool_calls_for_reflection: int = 2
+    injection_mode: str = "reference"
+
+
 class SandboxNetworkSettings(BaseModel):
     """OS-level network restrictions passed to sandbox-runtime."""
 
@@ -646,6 +678,7 @@ class Settings(BaseModel):
     permission: PermissionSettings = Field(default_factory=PermissionSettings)
     hooks: dict[str, list[HookDefinition]] = Field(default_factory=dict)
     memory: MemorySettings = Field(default_factory=MemorySettings)
+    introspection: IntrospectionSettings = Field(default_factory=IntrospectionSettings)
     sandbox: SandboxSettings = Field(default_factory=SandboxSettings)
     enabled_plugins: dict[str, bool] = Field(default_factory=dict)
     allow_project_plugins: bool = False

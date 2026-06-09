@@ -530,6 +530,10 @@
             <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4"/></svg>
             <span class="truncate">Memory 记忆</span>
           </button>
+          <button onclick="switchSubView('introspection')" class="sub-nav-btn" data-subview="introspection">
+            <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 17v-2a4 4 0 014-4h4m0 0l-3-3m3 3l-3 3M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
+            <span class="truncate">Introspection 自省</span>
+          </button>
           <button onclick="switchSubView('social')" class="sub-nav-btn" data-subview="social">
             <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"/></svg>
             <span class="truncate">Social 社交</span>
@@ -919,6 +923,41 @@
             </div>
             <div class="flex flex-wrap gap-2 items-center mt-4">
               <button onclick="saveMemoryMd()" class="btn-primary">保存 MEMORY.md</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Introspection View -->
+        <div id="viewIntrospection" class="hidden space-y-6">
+          <div class="form-card">
+            <div class="flex items-center gap-3 mb-4">
+              <div class="w-8 h-8 rounded-lg bg-accent-blue/10 flex items-center justify-center">
+                <svg class="w-4 h-4 text-accent-blue" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 17v-2a4 4 0 014-4h4m0 0l-3-3m3 3l-3 3M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
+              </div>
+              <div>
+                <h3 class="text-base font-semibold text-text-primary">自省日志</h3>
+                <p class="text-xs text-text-muted">查看自省结果、证据摘要和经验写入记录</p>
+              </div>
+            </div>
+            <div class="flex flex-wrap gap-2 items-center mb-4">
+              <button onclick="loadIntrospection()" class="btn-secondary text-xs px-3 py-1.5">
+                <svg class="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+                刷新
+              </button>
+              <select id="introspectionSourceFilter" class="form-input text-xs px-3 py-1.5" style="max-width: 180px;" onchange="loadIntrospection()">
+                <option value="">全部来源</option>
+                <option value="interactive">CLI/UI</option>
+                <option value="bot_chat">机器人聊天</option>
+                <option value="cron">定时任务</option>
+                <option value="remote_trigger">远程触发</option>
+                <option value="subtask">后台子任务</option>
+              </select>
+            </div>
+            <div id="introspectionReflections" class="space-y-3 mb-5">
+              <div class="text-sm text-text-muted">加载中...</div>
+            </div>
+            <div id="introspectionEvents" class="space-y-2">
+              <div class="text-sm text-text-muted">暂无日志</div>
             </div>
           </div>
         </div>
@@ -1479,6 +1518,7 @@
       document.getElementById('viewAgents').classList.toggle('hidden', view !== 'agents');
       document.getElementById('viewSkills').classList.toggle('hidden', view !== 'skills');
       document.getElementById('viewMemory').classList.toggle('hidden', view !== 'memory');
+      document.getElementById('viewIntrospection').classList.toggle('hidden', view !== 'introspection');
       document.getElementById('viewSocial').classList.toggle('hidden', view !== 'social');
       document.getElementById('viewPlugins').classList.toggle('hidden', view !== 'plugins');
       document.getElementById('viewMcp').classList.toggle('hidden', view !== 'mcp');
@@ -1491,6 +1531,7 @@
       if (view === 'skills') loadSkills();
       if (view === 'social') loadSocialSettings();
       if (view === 'memory') loadMemorySettings();
+      if (view === 'introspection') loadIntrospection();
       if (view === 'plugins') loadPlugins();
       if (view === 'mcp') loadMcpServers();
       if (view === 'sessions') loadSessions();
@@ -3235,6 +3276,75 @@
           </div>
         </div>
       `}).join('');
+    }
+
+    // Introspection
+    async function loadIntrospection() {
+      const source = document.getElementById('introspectionSourceFilter')?.value || '';
+      const query = source ? `?source_kind=${encodeURIComponent(source)}` : '';
+      try {
+        const [eventsRes, reflectionsRes] = await Promise.all([
+          fetch('/api/introspection/events' + query),
+          fetch('/api/introspection/reflections')
+        ]);
+        const eventsData = await eventsRes.json();
+        const reflectionsData = await reflectionsRes.json();
+        renderIntrospectionReflections(reflectionsData.reflections || []);
+        renderIntrospectionEvents(eventsData.events || []);
+      } catch (e) {
+        document.getElementById('introspectionReflections').innerHTML = '<div class="text-sm text-red-400">加载失败</div>';
+        document.getElementById('introspectionEvents').innerHTML = '';
+      }
+    }
+
+    function renderIntrospectionReflections(reflections) {
+      const container = document.getElementById('introspectionReflections');
+      if (!reflections || reflections.length === 0) {
+        container.innerHTML = '<div class="text-sm text-text-muted">暂无自省运行</div>';
+        return;
+      }
+      container.innerHTML = reflections.slice(0, 20).map(r => {
+        const statusColor = r.status === 'completed' ? 'bg-accent-green/10 text-accent-green' :
+                           r.status === 'running' ? 'bg-accent-blue/10 text-accent-blue' :
+                           r.status === 'skipped' ? 'bg-text-muted/10 text-text-muted' :
+                           'bg-red-500/10 text-red-400';
+        return `
+        <div class="p-3.5 bg-dark-bg-secondary border border-dark-border rounded-lg">
+          <div class="flex flex-wrap gap-2 items-center">
+            <span class="text-sm font-medium text-text-primary">${escapeHtml(r.reflection_id || '')}</span>
+            <span class="text-xs px-2 py-1 rounded ${statusColor}">${escapeHtml(r.status || 'unknown')}</span>
+            <span class="text-xs text-text-muted">${escapeHtml(r.source_kind || '')}</span>
+            <span class="text-xs text-text-muted ml-auto">${escapeHtml(r.end_time || '')}</span>
+          </div>
+          <div class="text-xs text-text-secondary mt-2">${escapeHtml(r.summary || '')}</div>
+          <div class="text-xs text-text-muted mt-1">memory: ${Number(r.memory_count || 0)} ${r.outcome ? ' · ' + escapeHtml(r.outcome) : ''}</div>
+        </div>`;
+      }).join('');
+    }
+
+    function renderIntrospectionEvents(events) {
+      const container = document.getElementById('introspectionEvents');
+      if (!events || events.length === 0) {
+        container.innerHTML = '<div class="text-sm text-text-muted">暂无自省日志</div>';
+        return;
+      }
+      container.innerHTML = events.slice(0, 200).map(e => {
+        const levelColor = e.level === 'ERROR' ? 'text-red-400' :
+                          e.level === 'WARNING' ? 'text-accent-amber' :
+                          e.level === 'DEBUG' ? 'text-text-muted' : 'text-accent-blue';
+        const text = e.display_text || e.summary || '';
+        return `
+        <div class="p-3 bg-dark-bg-secondary border border-dark-border rounded-lg">
+          <div class="flex flex-wrap gap-2 items-center text-xs">
+            <span class="${levelColor}">${escapeHtml(e.level || 'INFO')}</span>
+            <span class="text-text-primary">${escapeHtml(e.event || '')}</span>
+            <span class="text-text-muted">${escapeHtml(e.source_kind || '')}</span>
+            <span class="text-text-muted ml-auto">${escapeHtml(e.timestamp || '')}</span>
+          </div>
+          ${text ? `<div class="text-xs text-text-secondary mt-2 leading-relaxed">${escapeHtml(text)}</div>` : ''}
+          ${e.reflection_id ? `<div class="text-[11px] text-text-muted mt-1">${escapeHtml(e.reflection_id)}</div>` : ''}
+        </div>`;
+      }).join('');
     }
 
     // Social

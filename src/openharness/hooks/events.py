@@ -18,3 +18,7 @@ class HookEvent(str, Enum):
     NOTIFICATION = "notification"
     STOP = "stop"
     SUBAGENT_STOP = "subagent_stop"
+
+    # Introspection events
+    POST_SESSION_REFLECT = "post_session_reflect"
+    EXPERIENCE_RETRIEVED = "experience_retrieved"

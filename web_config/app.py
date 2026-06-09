@@ -1325,6 +1325,72 @@ async def update_memory_md(data: dict):
     return {"status": "ok"}
 
 
+def _introspection_events_path() -> Path:
+    from openharness.introspection.config import IntrospectionConfig
+
+    return IntrospectionConfig.from_settings(_get_settings_obj()).get_events_path(Path.cwd())
+
+
+@app.get("/api/introspection/events")
+async def list_introspection_events(
+    limit: int = 200,
+    source_kind: str | None = None,
+    reflection_id: str | None = None,
+    level: str | None = None,
+):
+    """List web-safe introspection events."""
+    from openharness.introspection.web import load_events
+
+    safe_limit = max(1, min(int(limit), 1000))
+    events = load_events(
+        _introspection_events_path(),
+        limit=safe_limit,
+        source_kind=source_kind or None,
+        reflection_id=reflection_id or None,
+        level=level or None,
+    )
+    return {"events": [_model_dump(event) for event in events]}
+
+
+@app.get("/api/introspection/reflections")
+async def list_introspection_reflections(limit: int = 50):
+    """List introspection reflection run summaries."""
+    from openharness.introspection.web import get_reflection_summaries
+
+    safe_limit = max(1, min(int(limit), 500))
+    return {
+        "reflections": get_reflection_summaries(
+            _introspection_events_path(),
+            limit=safe_limit,
+        )
+    }
+
+
+@app.get("/api/introspection/reflections/{reflection_id}")
+async def get_introspection_reflection(reflection_id: str):
+    """Get details for a single introspection reflection run."""
+    from openharness.introspection.web import get_reflection_detail
+
+    detail = get_reflection_detail(_introspection_events_path(), reflection_id)
+    if detail is None:
+        raise HTTPException(status_code=404, detail=f"Reflection not found: {reflection_id}")
+    return detail
+
+
+@app.get("/api/introspection/memories")
+async def list_introspection_memories(limit: int = 100):
+    """List durable memories written by introspection."""
+    from openharness.introspection.web import get_introspection_memories
+
+    safe_limit = max(1, min(int(limit), 500))
+    return {
+        "memories": get_introspection_memories(
+            _introspection_events_path(),
+            limit=safe_limit,
+        )
+    }
+
+
 @app.get("/api/plugins")
 async def list_plugins():
     """List project plugins."""
