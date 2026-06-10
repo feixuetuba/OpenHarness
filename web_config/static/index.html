@@ -929,6 +929,75 @@
 
         <!-- Introspection View -->
         <div id="viewIntrospection" class="hidden space-y-6">
+          <!-- Introspection Settings -->
+          <div class="form-card">
+            <div class="flex items-center gap-3 mb-4">
+              <div class="w-8 h-8 rounded-lg bg-accent-blue/10 flex items-center justify-center">
+                <svg class="w-4 h-4 text-accent-blue" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+              </div>
+              <div>
+                <h3 class="text-base font-semibold text-text-primary">自省配置</h3>
+                <p class="text-xs text-text-muted">设置反省供应商、模型和触发条件</p>
+              </div>
+            </div>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label class="form-label">启用自省</label>
+                <select id="introEnabled" class="form-input">
+                  <option value="true">启用</option>
+                  <option value="false">禁用</option>
+                </select>
+              </div>
+              <div>
+                <label class="form-label">会话后自动反省</label>
+                <select id="introAutoReflect" class="form-input">
+                  <option value="true">启用</option>
+                  <option value="false">禁用</option>
+                </select>
+              </div>
+              <div>
+                <label class="form-label">反省供应商</label>
+                <select id="introReflectionProvider" class="form-input" onchange="onIntroProviderChange()">
+                  <option value="">（跟随当前 Agent）</option>
+                </select>
+              </div>
+              <div>
+                <label class="form-label">反省模型</label>
+                <select id="introReflectionModel" class="form-input">
+                  <option value="">（使用供应商默认模型）</option>
+                </select>
+              </div>
+              <div>
+                <label class="form-label">最低经验置信度</label>
+                <input type="number" id="introMinConfidence" class="form-input" min="0" max="1" step="0.05" />
+              </div>
+              <div>
+                <label class="form-label">最大经验条数 (Top K)</label>
+                <input type="number" id="introTopK" class="form-input" min="1" max="20" step="1" />
+              </div>
+              <div>
+                <label class="form-label">反省超时 (秒)</label>
+                <input type="number" id="introTimeout" class="form-input" min="10" max="300" step="5" />
+              </div>
+              <div>
+                <label class="form-label">经验注入模式</label>
+                <select id="introInjectionMode" class="form-input">
+                  <option value="off">关闭</option>
+                  <option value="reference">参考模式</option>
+                  <option value="auto">自动模式</option>
+                </select>
+              </div>
+              <div>
+                <label class="form-label">最少工具调用数触发反省</label>
+                <input type="number" id="introMinToolCalls" class="form-input" min="0" max="50" step="1" />
+              </div>
+            </div>
+            <div class="flex flex-wrap gap-2 items-center mt-4">
+              <button onclick="saveIntrospectionSettings()" class="btn-primary">保存自省配置</button>
+            </div>
+          </div>
+
+          <!-- Introspection Logs -->
           <div class="form-card">
             <div class="flex items-center gap-3 mb-4">
               <div class="w-8 h-8 rounded-lg bg-accent-blue/10 flex items-center justify-center">
@@ -1531,7 +1600,7 @@
       if (view === 'skills') loadSkills();
       if (view === 'social') loadSocialSettings();
       if (view === 'memory') loadMemorySettings();
-      if (view === 'introspection') loadIntrospection();
+      if (view === 'introspection') { loadIntrospectionSettings(); loadIntrospection(); }
       if (view === 'plugins') loadPlugins();
       if (view === 'mcp') loadMcpServers();
       if (view === 'sessions') loadSessions();
@@ -3276,6 +3345,109 @@
           </div>
         </div>
       `}).join('');
+    }
+
+    // Introspection Settings
+    let introProfilesCache = [];
+
+    async function loadIntrospectionSettings() {
+      try {
+        const [settingsRes, profilesRes] = await Promise.all([
+          fetch('/api/introspection/settings'),
+          fetch('/api/settings')
+        ]);
+        const settings = await settingsRes.json();
+        const profilesData = await profilesRes.json();
+        introProfilesCache = profilesData.profiles || [];
+
+        document.getElementById('introEnabled').value = String(settings.enabled);
+        document.getElementById('introAutoReflect').value = String(settings.auto_reflect);
+        document.getElementById('introMinConfidence').value = settings.min_confidence_threshold;
+        document.getElementById('introTopK').value = settings.top_k_experiences;
+        document.getElementById('introTimeout').value = settings.reflection_timeout_seconds;
+        document.getElementById('introInjectionMode').value = settings.injection_mode;
+        document.getElementById('introMinToolCalls').value = settings.min_tool_calls_for_reflection;
+
+        // Populate provider dropdown
+        const providerSelect = document.getElementById('introReflectionProvider');
+        providerSelect.innerHTML = '<option value="">（跟随当前 Agent）</option>';
+        introProfilesCache.forEach(p => {
+          if (p.configured) {
+            const opt = document.createElement('option');
+            opt.value = p.name;
+            opt.textContent = `${p.label} (${p.name})`;
+            providerSelect.appendChild(opt);
+          }
+        });
+        providerSelect.value = settings.reflection_provider || '';
+
+        // Load models for selected provider
+        await onIntroProviderChange();
+      } catch (e) {
+        console.error('Failed to load introspection settings:', e);
+      }
+
+      // Restore saved reflection model after models are loaded
+      const modelSelect = document.getElementById('introReflectionModel');
+      if (modelSelect && settings.reflection_model) {
+        modelSelect.value = settings.reflection_model;
+      }
+    }
+
+    async function onIntroProviderChange() {
+      const providerSelect = document.getElementById('introReflectionProvider');
+      const modelSelect = document.getElementById('introReflectionModel');
+      const provider = providerSelect ? providerSelect.value : '';
+      if (!modelSelect) return;
+      modelSelect.innerHTML = '<option value="">（使用供应商默认模型）</option>';
+
+      if (!provider) return;
+
+      try {
+        const url = '/api/profile/' + encodeURIComponent(provider) + '/models';
+        const res = await fetch(url);
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const data = await res.json();
+        const models = data.models || [];
+        models.forEach(m => {
+          const opt = document.createElement('option');
+          opt.value = m;
+          opt.textContent = m;
+          modelSelect.appendChild(opt);
+        });
+        console.log('Introspection models loaded for ' + provider + ':', models);
+      } catch (e) {
+        console.error('Failed to fetch introspection models for ' + provider + ':', e);
+      }
+    }
+
+    async function saveIntrospectionSettings() {
+      const body = {
+        enabled: document.getElementById('introEnabled').value === 'true',
+        auto_reflect: document.getElementById('introAutoReflect').value === 'true',
+        reflection_provider: document.getElementById('introReflectionProvider').value,
+        reflection_model: document.getElementById('introReflectionModel').value,
+        min_confidence_threshold: parseFloat(document.getElementById('introMinConfidence').value),
+        top_k_experiences: parseInt(document.getElementById('introTopK').value),
+        reflection_timeout_seconds: parseFloat(document.getElementById('introTimeout').value),
+        injection_mode: document.getElementById('introInjectionMode').value,
+        min_tool_calls_for_reflection: parseInt(document.getElementById('introMinToolCalls').value),
+      };
+      try {
+        const res = await fetch('/api/introspection/settings', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body)
+        });
+        const result = await res.json();
+        if (result.status === 'ok') {
+          showToast('自省配置已保存', 'success');
+        } else {
+          showToast('保存失败', 'error');
+        }
+      } catch (e) {
+        showToast('保存失败: ' + e.message, 'error');
+      }
     }
 
     // Introspection

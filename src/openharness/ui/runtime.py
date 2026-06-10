@@ -562,6 +562,46 @@ async def build_runtime(
     )
 
 
+def _resolve_reflection_api_client(
+    settings,
+    config,
+):
+    """Resolve API client and model for introspection reflection.
+
+    If reflection_provider is configured, create an API client for that provider.
+    Falls back to the agent's default model if model list fetch fails.
+    """
+    provider = config.reflection_provider
+    profiles = settings.merged_profiles()
+    profile = profiles.get(provider)
+    if profile is None:
+        # Provider not found in profiles, use agent's defaults
+        return None, settings.model
+
+    # Build a temporary settings-like object for this provider
+    from openharness.config.settings import Settings
+
+    tmp_settings = Settings(**settings.model_dump())
+    tmp_settings.active_profile = provider
+    tmp_settings = tmp_settings.materialize_active_profile()
+
+    # Use the profile's default model, or fall back to agent's model
+    reflection_model = (
+        config.reflection_model
+        or getattr(profile, "default_model", "")
+        or getattr(profile, "last_model", "")
+        or settings.model
+    )
+    tmp_settings.model = reflection_model
+
+    try:
+        client = _resolve_api_client_from_settings(tmp_settings)
+        return client, reflection_model
+    except Exception:
+        # If client creation fails, fall back to agent's client and model
+        return None, settings.model
+
+
 async def start_runtime(bundle: RuntimeBundle) -> None:
     """Run session start hooks."""
     await bundle.hook_executor.execute(
@@ -610,15 +650,24 @@ async def _run_introspection_reflection(bundle: RuntimeBundle) -> None:
     from openharness.introspection.sources import source_from_interactive_session
 
     try:
-        config = IntrospectionConfig.from_settings(bundle.current_settings())
+        settings = bundle.current_settings()
+        config = IntrospectionConfig.from_settings(settings)
         if not config.enabled or not config.auto_reflect:
             return
+
+        # Resolve reflection API client and model
+        reflection_api_client = bundle.api_client
+        reflection_model = bundle.engine.model
+        if config.reflection_provider:
+            reflection_api_client, reflection_model = _resolve_reflection_api_client(
+                settings, config
+            )
 
         engine = IntrospectionEngine(
             cwd=bundle.cwd,
             config=config,
-            api_client=bundle.api_client,
-            default_model=bundle.engine.model,
+            api_client=reflection_api_client,
+            default_model=reflection_model,
             hook_executor=bundle.hook_executor,
         )
 

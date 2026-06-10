@@ -93,6 +93,7 @@ class IntrospectionSettings(BaseModel):
     experience_ttl_days: int = 90
     min_confidence_threshold: float = 0.7
     top_k_experiences: int = 5
+    reflection_provider: str = ""
     reflection_model: str = ""
     reflection_timeout_seconds: float = 60.0
     async_reflection: bool = True

@@ -15,7 +15,8 @@ class IntrospectionConfig:
 
     enabled: bool = False
     auto_reflect: bool = False
-    reflection_model: str = ""  # empty = use default model
+    reflection_provider: str = ""  # empty = use current agent's provider
+    reflection_model: str = ""  # empty = use current agent's model
     min_confidence: float = 0.7
     max_experience_top_k: int = 5
     reflection_timeout_seconds: float = 60.0
@@ -44,6 +45,7 @@ class IntrospectionConfig:
         if introspection is not None:
             config.enabled = bool(getattr(introspection, "enabled", False))
             config.auto_reflect = bool(getattr(introspection, "auto_reflect", False))
+            config.reflection_provider = str(getattr(introspection, "reflection_provider", ""))
             config.reflection_model = str(getattr(introspection, "reflection_model", ""))
             config.min_confidence = float(
                 getattr(

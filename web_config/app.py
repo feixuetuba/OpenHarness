@@ -14,6 +14,7 @@ import re
 import shutil
 import sys
 import time
+import traceback
 import zipfile
 from contextlib import asynccontextmanager
 from dataclasses import asdict, is_dataclass
@@ -41,7 +42,8 @@ async def lifespan(app: FastAPI):
     try:
         await runtime.start(_load_settings())
     except Exception:
-        logger.exception("Failed to start OpenHarness channel runtime")
+        traceback.print_exc()
+        # logger.exception("Failed to start OpenHarness channel runtime")
     try:
         yield
     finally:
@@ -96,6 +98,7 @@ def _load_agents_payload() -> dict[str, Any]:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
+        traceback.print_exc()
         return {"agents": [], "active_agent_id": None}
     agents = data.get("agents", [])
     if not isinstance(agents, list):
@@ -537,6 +540,78 @@ async def set_api_key(auth_source: str, update: ApiKeyUpdate):
     manager.store_profile_credential(target_profile, "api_key", update.api_key)
 
     return {"status": "ok"}
+
+
+@app.get("/api/profile/{profile_name}/models")
+async def get_profile_models(profile_name: str):
+    """Get available models for a provider profile."""
+    from openharness.config.settings import Settings
+    import httpx
+
+    settings = Settings(**_load_settings())
+    profiles = settings.merged_profiles()
+    profile = profiles.get(profile_name)
+    if profile is None:
+        raise HTTPException(status_code=404, detail=f"Profile not found: {profile_name}")
+
+    models: list[str] = []
+
+    # Try to fetch models from the API first
+    try:
+        tmp_settings = Settings(**settings.model_dump())
+        tmp_settings.active_profile = profile_name
+        tmp_settings = tmp_settings.materialize_active_profile()
+
+        api_format = getattr(tmp_settings, "api_format", "openai") or "openai"
+        base_url = (getattr(tmp_settings, "base_url", "") or "").strip().rstrip("/")
+        resolved_auth = tmp_settings.resolve_auth()
+        api_key = resolved_auth.value if resolved_auth else ""
+
+        if base_url:
+            url = f"{base_url}/models" if base_url.endswith("/v1") else f"{base_url}/v1/models"
+            headers = {"Content-Type": "application/json"}
+            if api_format == "anthropic":
+                headers["x-api-key"] = api_key
+            else:
+                headers["Authorization"] = f"Bearer {api_key}"
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                response = await client.get(url, headers=headers)
+                response.raise_for_status()
+                payload = response.json()
+            raw_models = payload.get("data") or payload.get("models") or []
+            models = [item.get("id") or item.get("name") for item in raw_models if isinstance(item, dict)]
+            models = [m for m in models if m]
+    except Exception:
+        pass
+
+    # Fall back to known models from profile config
+    if not models:
+        models = _profile_model_options(profile)
+
+    # Always include the profile's default_model and last_model as fallbacks
+    for m in [profile.default_model, profile.last_model]:
+        if m and m not in models:
+            models.append(m)
+
+    return {"profile": profile_name, "models": models}
+
+
+@app.get("/api/profiles/all")
+async def get_all_profiles():
+    """Get all provider profiles for introspection provider selection."""
+    from openharness.config.settings import Settings
+
+    settings = Settings(**_load_settings())
+    profiles = settings.merged_profiles()
+    result = []
+    for name, profile in sorted(profiles.items()):
+        result.append({
+            "name": name,
+            "label": getattr(profile, "label", name) or name,
+            "default_model": getattr(profile, "default_model", "") or "",
+            "provider": getattr(profile, "provider", "") or "",
+        })
+    return {"profiles": result}
 
 
 @app.post("/api/profile/{profile_name}/set-key")
@@ -1329,6 +1404,65 @@ def _introspection_events_path() -> Path:
     from openharness.introspection.config import IntrospectionConfig
 
     return IntrospectionConfig.from_settings(_get_settings_obj()).get_events_path(Path.cwd())
+
+
+class IntrospectionSettingsUpdate(BaseModel):
+    """Update introspection settings."""
+    enabled: bool | None = None
+    auto_reflect: bool | None = None
+    reflection_provider: str | None = None
+    reflection_model: str | None = None
+    min_confidence_threshold: float | None = None
+    top_k_experiences: int | None = None
+    reflection_timeout_seconds: float | None = None
+    injection_mode: str | None = None
+    min_tool_calls_for_reflection: int | None = None
+
+
+@app.get("/api/introspection/settings")
+async def get_introspection_settings():
+    """Get current introspection settings."""
+    settings = _get_settings_obj()
+    intro = getattr(settings, "introspection", None)
+    if intro is None:
+        return {
+            "enabled": False,
+            "auto_reflect": False,
+            "reflection_provider": "",
+            "reflection_model": "",
+            "min_confidence_threshold": 0.7,
+            "top_k_experiences": 5,
+            "reflection_timeout_seconds": 60.0,
+            "injection_mode": "reference",
+            "min_tool_calls_for_reflection": 2,
+        }
+    return {
+        "enabled": getattr(intro, "enabled", False),
+        "auto_reflect": getattr(intro, "auto_reflect", False),
+        "reflection_provider": getattr(intro, "reflection_provider", ""),
+        "reflection_model": getattr(intro, "reflection_model", ""),
+        "min_confidence_threshold": getattr(intro, "min_confidence_threshold", 0.7),
+        "top_k_experiences": getattr(intro, "top_k_experiences", 5),
+        "reflection_timeout_seconds": getattr(intro, "reflection_timeout_seconds", 60.0),
+        "injection_mode": getattr(intro, "injection_mode", "reference"),
+        "min_tool_calls_for_reflection": getattr(intro, "min_tool_calls_for_reflection", 2),
+    }
+
+
+@app.put("/api/introspection/settings")
+async def update_introspection_settings(update: IntrospectionSettingsUpdate):
+    """Update introspection settings."""
+    data = _load_settings()
+    intro = data.get("introspection", {})
+
+    for field in update.model_fields_set:
+        value = getattr(update, field)
+        if value is not None:
+            intro[field] = value
+
+    data["introspection"] = intro
+    _save_settings(data)
+    return {"status": "ok", "updated": list(update.model_fields_set)}
 
 
 @app.get("/api/introspection/events")

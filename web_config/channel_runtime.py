@@ -1788,7 +1788,7 @@ class WebConfigSmartChannelBridge:
         if not match:
             return {"active": False, "description": ""}, text
         full_match = match.group(0)
-        description = match.group(1) or match.group(2) or ""
+        description = match.group(1) or ""
         if "无需" in full_match.lower():
             expecting = {"active": False, "description": ""}
         else:
