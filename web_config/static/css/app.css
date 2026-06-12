@@ -1,0 +1,676 @@
+* { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #1e293b; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #334155; }
+.chat-scroll::-webkit-scrollbar { width: 6px; }
+
+/* Fix browser autofill overriding dark theme styles */
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus,
+input:-webkit-autofill:active {
+  -webkit-box-shadow: 0 0 0 30px #0f1629 inset !important;
+  -webkit-text-fill-color: #f1f5f9 !important;
+  transition: background-color 5000s ease-in-out 0s;
+}
+input:-moz-autofill {
+  box-shadow: 0 0 0 30px #0f1629 inset !important;
+  -moz-text-fill-color: #f1f5f9 !important;
+}
+
+/* Force dark theme styles on all inputs */
+input[type="text"],
+input[type="password"],
+input[type="number"],
+input[type="email"],
+input[type="url"],
+input[type="search"],
+textarea,
+select {
+  background-color: #0f1629 !important;
+  color: #f1f5f9 !important;
+  border-color: #1e293b !important;
+}
+input[type="text"]::placeholder,
+input[type="password"]::placeholder,
+input[type="number"]::placeholder,
+input[type="email"]::placeholder,
+input[type="url"]::placeholder,
+input[type="search"]::placeholder,
+textarea::placeholder {
+  color: #64748b !important;
+}
+
+.sub-nav-btn {
+  align-items: center;
+  border-radius: 8px;
+  color: #94a3b8;
+  cursor: pointer;
+  display: flex;
+  font-size: 14px;
+  gap: 12px;
+  padding: 12px 16px;
+  text-align: left;
+  transition: all 200ms ease;
+  display: flex !important;
+  flex-direction: row !important;
+  width: 100% !important;
+  margin-bottom: 4px !important;
+}
+.sub-nav-btn:hover {
+  background: rgba(30, 41, 59, 0.5);
+  color: #f1f5f9;
+}
+.sub-nav-btn:last-child {
+  margin-bottom: 0 !important;
+}
+.sub-nav-btn.active {
+  background: linear-gradient(to right, rgba(52, 211, 153, 0.1), transparent);
+  border-left: 2px solid #34d399;
+  color: #34d399;
+  font-weight: 500;
+}
+.nav-icon-btn {
+  align-items: center;
+  border-radius: 12px;
+  color: #64748b;
+  cursor: pointer;
+  display: flex;
+  height: 40px;
+  justify-content: center;
+  transition: all 200ms ease;
+  width: 40px;
+}
+.nav-icon-btn:hover {
+  background: rgba(30, 41, 59, 0.5);
+  color: #f1f5f9;
+}
+.nav-icon-btn.active {
+  background: rgba(52, 211, 153, 0.1);
+  box-shadow: 0 0 20px rgba(52, 211, 153, 0.15);
+  color: #34d399;
+}
+.form-card {
+  background: #141b2d;
+  border: 1px solid #1e293b;
+  border-radius: 12px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+  padding: 24px;
+  transition: all 200ms ease;
+}
+.form-card:hover {
+  border-color: #334155;
+}
+.form-card .form-section {
+  border-bottom: 1px solid rgba(30, 41, 59, 0.5);
+  margin-bottom: 20px;
+  padding-bottom: 20px;
+}
+.form-card .form-section:last-child {
+  border-bottom: 0;
+  margin-bottom: 0;
+  padding-bottom: 0;
+}
+.form-input {
+  background: #0f1629;
+  border: 1px solid #1e293b;
+  border-radius: 8px;
+  color: #f1f5f9;
+  font-size: 14px;
+  padding: 10px 14px;
+  transition: all 200ms ease;
+  width: 100%;
+}
+.form-input:focus {
+  border-color: #34d399;
+  box-shadow: 0 0 0 2px rgba(52, 211, 153, 0.2);
+  outline: none;
+}
+.form-input::placeholder {
+  color: #64748b;
+}
+.form-label {
+  color: #94a3b8;
+  display: block;
+  font-size: 12px;
+  font-weight: 500;
+  margin-bottom: 8px;
+}
+.form-item {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+.form-item:last-child {
+  margin-bottom: 0;
+}
+.social-tab-btn {
+  background: #0f1629;
+  border: 1px solid #1e293b;
+  border-radius: 8px;
+  color: #94a3b8;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 500;
+  padding: 10px 16px;
+  transition: all 200ms ease;
+}
+.social-tab-btn:hover {
+  border-color: #334155;
+  color: #f1f5f9;
+}
+.social-tab-btn.active {
+  background: linear-gradient(to right, rgba(52, 211, 153, 0.1), transparent);
+  border-color: rgba(52, 211, 153, 0.5);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+  color: #34d399;
+}
+.install-tab-list {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 4px;
+  padding: 4px;
+  margin-bottom: 20px;
+  border: 1px solid #1e293b;
+  border-radius: 10px;
+  background: #0f1629;
+}
+.install-tab-btn {
+  appearance: none;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: #94a3b8;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1;
+  padding: 12px 14px;
+  text-align: center;
+  transition: background-color 160ms ease, border-color 160ms ease, color 160ms ease, box-shadow 160ms ease;
+}
+.install-tab-btn.active {
+  background: #141b2d;
+  border-color: rgba(52, 211, 153, 0.65);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3), inset 0 0 0 1px rgba(52, 211, 153, 0.08);
+  color: #34d399;
+}
+.install-tab-btn:hover {
+  background: rgba(30, 41, 59, 0.55);
+  color: #f1f5f9;
+}
+.install-tab-btn.active:hover {
+  background: #141b2d;
+  color: #34d399;
+}
+.btn-primary {
+  background: linear-gradient(to right, #34d399, #059669);
+  border-radius: 8px;
+  color: #fff;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 500;
+  padding: 10px 16px;
+  transition: all 200ms ease;
+}
+.btn-primary:hover {
+  box-shadow: 0 0 20px rgba(52, 211, 153, 0.15);
+  transform: scale(1.02);
+}
+.btn-primary:active {
+  transform: scale(0.98);
+}
+.btn-secondary {
+  background: rgba(30, 41, 59, 0.5);
+  border: 1px solid #1e293b;
+  border-radius: 8px;
+  color: #94a3b8;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 500;
+  padding: 10px 16px;
+  transition: all 200ms ease;
+}
+.btn-secondary:hover {
+  background: #1e293b;
+  color: #f1f5f9;
+}
+.btn-danger {
+  background: rgba(239, 68, 68, 0.1);
+  border: 1px solid rgba(239, 68, 68, 0.2);
+  border-radius: 8px;
+  color: #f87171;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 500;
+  padding: 10px 16px;
+  transition: all 200ms ease;
+}
+.btn-danger:hover {
+  background: rgba(239, 68, 68, 0.2);
+  color: #fca5a5;
+}
+.test-result {
+  border-radius: 8px;
+  font-size: 14px;
+  margin-bottom: 12px;
+  padding: 12px;
+}
+.test-success {
+  background: rgba(52, 211, 153, 0.1);
+  border: 1px solid rgba(52, 211, 153, 0.3);
+  color: #34d399;
+}
+.test-error {
+  background: rgba(239, 68, 68, 0.1);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  color: #f87171;
+}
+.status-dot {
+  border-radius: 9999px;
+  display: inline-block;
+  height: 8px;
+  margin-right: 8px;
+  width: 8px;
+}
+.status-online { background: #34d399; box-shadow: 0 0 8px rgba(52, 211, 153, 0.6); }
+.status-offline { background: rgba(239, 68, 68, 0.6); }
+.chat-message-user {
+  background: linear-gradient(to bottom right, #34d399, #059669);
+  border-radius: 16px;
+  border-bottom-right-radius: 2px;
+  box-shadow: 0 0 20px rgba(52, 211, 153, 0.15);
+  color: #fff;
+  font-size: 14px;
+  max-width: 70%;
+  padding: 10px 16px;
+}
+.chat-message-assistant {
+  background: #141b2d;
+  border: 1px solid #1e293b;
+  border-radius: 16px;
+  border-bottom-left-radius: 2px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+  color: #f1f5f9;
+  font-size: 14px;
+  max-width: 70%;
+  padding: 10px 16px;
+}
+.chat-message-assistant p {
+  margin: 0.5em 0;
+}
+.chat-message-assistant p:first-child {
+  margin-top: 0;
+}
+.chat-message-assistant p:last-child {
+  margin-bottom: 0;
+}
+.chat-message-assistant code {
+  background: #0f1629;
+  border-radius: 4px;
+  color: #34d399;
+  font-family: "JetBrains Mono", monospace;
+  font-size: 12px;
+  padding: 2px 6px;
+}
+.chat-message-assistant pre {
+  background: #0f1629;
+  border: 1px solid #1e293b;
+  border-radius: 8px;
+  margin: 8px 0;
+  overflow-x: auto;
+  padding: 12px;
+}
+.chat-message-assistant pre code {
+  background: transparent;
+  font-size: 12px;
+  padding: 0;
+}
+.chat-message-assistant ul, .chat-message-assistant ol {
+  margin: 8px 0;
+  padding-left: 20px;
+}
+.chat-message-assistant li {
+  margin: 4px 0;
+}
+.chat-message-assistant blockquote {
+  border-left: 2px solid #34d399;
+  color: #94a3b8;
+  font-style: italic;
+  margin: 8px 0;
+  padding-left: 12px;
+}
+.chat-message-assistant table {
+  border-collapse: collapse;
+  margin: 8px 0;
+  width: 100%;
+}
+.chat-message-assistant th, .chat-message-assistant td {
+  border: 1px solid #1e293b;
+  font-size: 12px;
+  padding: 6px 12px;
+}
+.chat-message-assistant th {
+  background: #0f1629;
+  font-weight: 600;
+}
+.chat-message-assistant a {
+  color: #34d399;
+  text-decoration: underline;
+}
+.chat-message-assistant a:hover {
+  color: #059669;
+}
+.chat-message-assistant h1, .chat-message-assistant h2, .chat-message-assistant h3 {
+  font-weight: 600;
+  margin: 12px 0 8px;
+}
+.chat-message-assistant h1:first-child,
+.chat-message-assistant h2:first-child,
+.chat-message-assistant h3:first-child {
+  margin-top: 0;
+}
+.chat-message-assistant h1 { font-size: 16px; }
+.chat-message-assistant h2 { font-size: 14px; }
+.chat-message-assistant h3 { font-size: 14px; }
+.chat-message-assistant hr {
+  border-color: #1e293b;
+  margin: 12px 0;
+}
+.trace-log {
+  border-left: 2px solid #1e293b;
+  color: #64748b;
+  font-family: "JetBrains Mono", monospace;
+  font-size: 12px;
+  padding: 2px 0 2px 8px;
+}
+.glass-effect {
+  backdrop-filter: blur(4px);
+  background: rgba(20, 27, 45, 0.8);
+}
+.gradient-text {
+  background: linear-gradient(to right, #34d399, #60a5fa, #a78bfa);
+  background-clip: text;
+  color: transparent;
+}
+
+.open-cad-work-panel {
+  flex: 0 0 auto;
+  min-width: 420px;
+  overflow: hidden;
+  width: 46%;
+}
+
+.open-cad-status {
+  color: #64748b;
+  flex: 0 1 280px;
+  font-size: 12px;
+  margin-left: auto;
+  min-width: 0;
+  overflow: hidden;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.open-cad-status.error {
+  color: #f87171;
+}
+
+.open-cad-main-splitter {
+  background: #1e293b;
+  cursor: col-resize;
+  flex: 0 0 6px;
+  position: relative;
+  transition: background-color 160ms ease;
+}
+
+.open-cad-main-splitter::after {
+  background: rgba(148, 163, 184, 0.55);
+  border-radius: 999px;
+  content: "";
+  height: 44px;
+  left: 2px;
+  position: absolute;
+  top: calc(50% - 22px);
+  width: 2px;
+}
+
+.open-cad-main-splitter:hover,
+.open-cad-main-splitter.dragging {
+  background: rgba(52, 211, 153, 0.35);
+}
+
+.open-cad-editor-pane {
+  height: 58%;
+  max-height: 78%;
+  min-height: 260px;
+  overflow: auto;
+  resize: vertical;
+}
+
+.open-cad-chat-pane {
+  flex: 1 1 0;
+  min-height: 190px;
+}
+
+.open-cad-file-panel {
+  min-width: 150px;
+  width: 170px;
+}
+
+.open-cad-editor-container {
+  background: #0f172a;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.open-cad-editor-container .monaco-editor,
+.open-cad-editor-container .monaco-editor-background,
+.open-cad-editor-container .monaco-editor .inputarea.ime-input {
+  font-family: 'JetBrains Mono', monospace;
+}
+
+#openCadViewport canvas {
+  display: block;
+  height: 100% !important;
+  width: 100% !important;
+}
+
+.open-cad-overlay {
+  background: rgba(20, 27, 45, 0.84);
+  backdrop-filter: blur(6px);
+  border: 1px solid #1e293b;
+  border-radius: 8px;
+  bottom: 16px;
+  color: #94a3b8;
+  display: flex;
+  flex-direction: column;
+  font-size: 12px;
+  left: 16px;
+  max-height: 168px;
+  max-width: min(640px, calc(100% - 32px));
+  min-height: 72px;
+  overflow: hidden;
+  padding: 10px 12px;
+  position: absolute;
+  width: min(560px, calc(100% - 32px));
+}
+
+.open-cad-overlay.error {
+  border-color: rgba(248, 113, 113, 0.45);
+}
+
+.open-cad-overlay-title {
+  color: #f1f5f9;
+  flex: 0 0 auto;
+  font-size: 11px;
+  font-weight: 700;
+  margin-bottom: 6px;
+}
+
+.open-cad-overlay.error .open-cad-overlay-title {
+  color: #f87171;
+}
+
+.open-cad-overlay-message {
+  color: inherit;
+  flex: 1 1 auto;
+  font-family: "JetBrains Mono", monospace;
+  line-height: 1.45;
+  margin: 0;
+  min-height: 0;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.open-cad-view-gizmo {
+  background: rgba(15, 22, 41, 0.82);
+  backdrop-filter: blur(6px);
+  border: 1px solid rgba(51, 65, 85, 0.86);
+  border-radius: 8px;
+  bottom: 16px;
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.22);
+  height: 112px;
+  position: absolute;
+  padding: 0;
+  right: 16px;
+  width: 112px;
+  z-index: 5;
+}
+
+.open-cad-view-gizmo svg {
+  display: block;
+  height: 112px;
+  overflow: visible;
+  width: 112px;
+}
+
+.open-cad-view-gizmo .axis-line {
+  stroke-linecap: round;
+  stroke-width: 4;
+}
+
+.open-cad-view-gizmo .axis-origin {
+  fill: #e2e8f0;
+  opacity: 0.9;
+}
+
+.open-cad-view-gizmo .axis-label {
+  cursor: pointer;
+  outline: none;
+}
+
+.open-cad-view-gizmo .axis-label circle {
+  stroke: rgba(241, 245, 249, 0.72);
+  stroke-width: 1.5;
+  transition: filter 150ms ease, r 150ms ease;
+}
+
+.open-cad-view-gizmo .axis-label text {
+  fill: #f8fafc;
+  font-family: "JetBrains Mono", monospace;
+  font-size: 13px;
+  font-weight: 900;
+  paint-order: stroke;
+  pointer-events: none;
+  stroke: rgba(15, 23, 42, 0.85);
+  stroke-width: 3px;
+  text-anchor: middle;
+}
+
+.open-cad-view-gizmo .axis-label:hover circle {
+  filter: brightness(1.15);
+  r: 6;
+}
+
+.open-cad-view-gizmo .axis-x {
+  fill: #fb7185;
+  stroke: #fb7185;
+}
+
+.open-cad-view-gizmo .axis-y {
+  fill: #34d399;
+  stroke: #34d399;
+}
+
+.open-cad-view-gizmo .axis-z {
+  fill: #60a5fa;
+  stroke: #60a5fa;
+}
+
+.open-cad-file-tab {
+  align-items: center;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: #94a3b8;
+  cursor: pointer;
+  display: flex;
+  font-family: "JetBrains Mono", monospace;
+  font-size: 12px;
+  gap: 6px;
+  min-height: 30px;
+  overflow: hidden;
+  padding: 7px 9px;
+  text-align: left;
+  transition: all 160ms ease;
+  width: 100%;
+}
+
+.open-cad-file-tab:hover {
+  background: rgba(30, 41, 59, 0.55);
+  color: #f1f5f9;
+}
+
+.open-cad-file-tab.active {
+  background: rgba(52, 211, 153, 0.1);
+  border-color: rgba(52, 211, 153, 0.35);
+  color: #34d399;
+}
+
+.open-cad-file-tab-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.open-cad-chat-user {
+  background: linear-gradient(to bottom right, #34d399, #059669);
+  border-radius: 12px;
+  border-bottom-right-radius: 3px;
+  color: #fff;
+  font-size: 13px;
+  line-height: 1.45;
+  max-width: 78%;
+  padding: 8px 11px;
+}
+
+.open-cad-chat-assistant {
+  background: #141b2d;
+  border: 1px solid #1e293b;
+  border-radius: 12px;
+  border-bottom-left-radius: 3px;
+  color: #f1f5f9;
+  font-size: 13px;
+  line-height: 1.5;
+  max-width: 86%;
+  padding: 8px 11px;
+}
+
+.open-cad-chat-assistant pre {
+  background: #0f1629;
+  border: 1px solid #1e293b;
+  border-radius: 6px;
+  margin: 8px 0;
+  overflow-x: auto;
+  padding: 8px;
+}
+
+.open-cad-chat-assistant code {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 12px;
+}
