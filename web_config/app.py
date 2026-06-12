@@ -28,6 +28,7 @@ if src_path.exists() and str(src_path) not in sys.path:
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, Response, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from web_config.channel_runtime import WebConfigChannelRuntime
@@ -53,6 +54,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="OpenHarness Web Config", lifespan=lifespan)
 
 STATIC_DIR = Path(__file__).parent / "static"
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
 def _load_settings() -> dict[str, Any]:
@@ -89,6 +91,135 @@ def _get_agents_file() -> Path:
     from openharness.config.paths import get_config_dir
 
     return get_config_dir() / "agents.json"
+
+
+def _get_opencad_workspace_file() -> Path:
+    """Return the persisted OpenCAD workspace file path."""
+    from openharness.config.paths import get_config_dir
+
+    return get_config_dir() / "opencad_workspace.json"
+
+
+def _get_opencad_workspace_files_dir() -> Path:
+    """Return the project-local directory containing materialized OpenCAD files."""
+    return Path.cwd() / ".openharness" / "opencad_workspace" / "files"
+
+
+def _get_opencad_libraries_dir() -> Path:
+    """Return the bundled OpenSCAD library directory."""
+    return STATIC_DIR / "vendor" / "openscad" / "libraries"
+
+
+def _get_opencad_workspace_libraries_dir() -> Path:
+    """Return the workspace-local OpenSCAD library directory."""
+    return _get_opencad_workspace_files_dir()
+
+
+def _sanitize_opencad_file_name(name: Any) -> str:
+    text = re.sub(r'[\\/:*?"<>|]', "_", str(name or "").strip())
+    if not text:
+        text = "part"
+    if not text.lower().endswith(".scad"):
+        text = f"{text}.scad"
+    return text
+
+
+def _normalize_opencad_lookup_key(value: Any) -> str:
+    text = str(value or "").strip().strip("\"'`“”‘’").strip()
+    text = text.lstrip("/")
+    return text.lower()
+
+
+def _opencad_file_path(name: str) -> Path:
+    return _get_opencad_workspace_files_dir() / _sanitize_opencad_file_name(name)
+
+
+def _attach_opencad_file_paths(workspace: dict[str, Any]) -> dict[str, Any]:
+    for file in workspace.get("files", []):
+        file["local_path"] = str(_opencad_file_path(str(file.get("name") or "part.scad")))
+    return workspace
+
+
+def _materialize_opencad_workspace_files(workspace: dict[str, Any]) -> None:
+    from openharness.utils.fs import atomic_write_text
+
+    files_dir = _get_opencad_workspace_files_dir()
+    files_dir.mkdir(parents=True, exist_ok=True)
+    for file in workspace.get("files", []):
+        try:
+            atomic_write_text(_opencad_file_path(str(file.get("name") or "part.scad")), str(file.get("code") or ""))
+        except Exception:
+            traceback.print_exc()
+    _materialize_opencad_libraries()
+
+
+def _materialize_opencad_libraries() -> None:
+    source_root = _get_opencad_libraries_dir()
+    target_root = _get_opencad_workspace_libraries_dir()
+    if not source_root.exists():
+        return
+    for source in source_root.rglob("*"):
+        if not source.is_file():
+            continue
+        try:
+            rel = source.relative_to(source_root)
+            target = target_root / rel
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if not target.exists() or source.stat().st_mtime_ns > target.stat().st_mtime_ns:
+                shutil.copy2(source, target)
+        except Exception:
+            traceback.print_exc()
+
+
+def _normalize_opencad_workspace(payload: dict[str, Any] | None) -> dict[str, Any]:
+    files: list[dict[str, str]] = []
+    seen_ids: set[str] = set()
+    for index, item in enumerate((payload or {}).get("files", []) or []):
+        if not isinstance(item, dict):
+            continue
+        name = _sanitize_opencad_file_name(item.get("name") or f"part-{index + 1}.scad")
+        file_id = re.sub(r"[^A-Za-z0-9_-]", "_", str(item.get("id") or "").strip())
+        if not file_id or file_id in seen_ids:
+            file_id = f"file_{index + 1}"
+        seen_ids.add(file_id)
+        files.append(
+            {
+                "id": file_id,
+                "name": name,
+                "code": str(item.get("code") or ""),
+            }
+        )
+    if not files:
+        files = [{"id": "file_1", "name": "main.scad", "code": ""}]
+    active_file_id = str((payload or {}).get("active_file_id") or "").strip()
+    if not any(file["id"] == active_file_id for file in files):
+        active_file_id = files[0]["id"]
+    return _attach_opencad_file_paths({"files": files, "active_file_id": active_file_id})
+
+
+def _load_opencad_workspace() -> dict[str, Any]:
+    path = _get_opencad_workspace_file()
+    if not path.exists():
+        return {"files": [], "active_file_id": None}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        traceback.print_exc()
+        return {"files": [], "active_file_id": None}
+    workspace = _normalize_opencad_workspace(data)
+    _materialize_opencad_workspace_files(workspace)
+    return workspace
+
+
+def _save_opencad_workspace(payload: dict[str, Any]) -> dict[str, Any]:
+    from openharness.utils.fs import atomic_write_text
+
+    data = _normalize_opencad_workspace(payload)
+    path = _get_opencad_workspace_file()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write_text(path, json.dumps(data, indent=2, ensure_ascii=False))
+    _materialize_opencad_workspace_files(data)
+    return data
 
 
 def _load_agents_payload() -> dict[str, Any]:
@@ -153,9 +284,9 @@ def _get_path_aliases() -> dict[str, str]:
     aliases.setdefault("USKILL", "~/.openharness/skills")
     try:
         from openharness.config.paths import get_data_dir
-
         aliases.setdefault("UDATA", str(get_data_dir()))
     except Exception:
+        traceback.print_exc()
         aliases.setdefault("UDATA", "~/.openharness/data")
     aliases.setdefault("UPROJ", str(Path.cwd()))
     aliases.setdefault("UWEB", str((Path.cwd() / ".openharness" / "media" / "web").resolve()))
@@ -398,7 +529,20 @@ class AgentChatRequest(BaseModel):
     message: str
     session_id: str | None = None
     agent_id: str | None = None
+    profile: str | None = None
+    model: str | None = None
     attachments: list[dict[str, Any]] | None = None
+
+
+class OpenCadFile(BaseModel):
+    id: str
+    name: str
+    code: str = ""
+
+
+class OpenCadWorkspaceUpdate(BaseModel):
+    files: list[OpenCadFile]
+    active_file_id: str | None = None
 
 
 @app.get("/")
@@ -412,6 +556,76 @@ async def index():
     response.headers["Pragma"] = "no-cache"
     response.headers["Expires"] = "0"
     return response
+
+
+@app.get("/api/opencad/workspace")
+async def get_opencad_workspace():
+    """Get the persisted OpenCAD workspace."""
+    return _load_opencad_workspace()
+
+
+@app.get("/api/opencad/workspace/summary")
+async def get_opencad_workspace_summary():
+    """Get a lightweight OpenCAD workspace summary without full source."""
+    workspace = _load_opencad_workspace()
+    return {
+        "active_file_id": workspace.get("active_file_id"),
+        "library_root": str(_get_opencad_workspace_libraries_dir()),
+        "libraries": [
+            {
+                "name": path.name,
+                "local_path": str(_get_opencad_workspace_libraries_dir() / path.name),
+            }
+            for path in sorted(_get_opencad_libraries_dir().iterdir())
+            if path.is_dir()
+        ] if _get_opencad_libraries_dir().exists() else [],
+        "files": [
+            {
+                "id": file.get("id"),
+                "name": file.get("name"),
+                "local_path": file.get("local_path"),
+                "line_count": len(str(file.get("code") or "").splitlines()),
+                "char_count": len(str(file.get("code") or "")),
+                "active": file.get("id") == workspace.get("active_file_id"),
+            }
+            for file in workspace.get("files", [])
+        ],
+    }
+
+
+@app.get("/api/opencad/workspace/files/{file_key:path}")
+async def get_opencad_workspace_file(file_key: str):
+    """Get one OpenCAD file by ID or filename."""
+    workspace = _load_opencad_workspace()
+    key = _normalize_opencad_lookup_key(file_key)
+    for file in workspace.get("files", []):
+        if _normalize_opencad_lookup_key(file.get("id")) == key or _normalize_opencad_lookup_key(file.get("name")) == key:
+            return file
+    raise HTTPException(status_code=404, detail=f"OpenCAD file not found: {file_key}")
+
+
+@app.get("/api/opencad/libraries")
+async def get_opencad_libraries():
+    """Get bundled OpenSCAD library files for the WASM virtual FS."""
+    root = _get_opencad_libraries_dir()
+    files: list[dict[str, str]] = []
+    if not root.exists():
+        return {"files": []}
+    for path in sorted(root.rglob("*.scad")):
+        if not path.is_file():
+            continue
+        try:
+            rel = path.relative_to(root).as_posix()
+            files.append({"path": rel, "content": path.read_text(encoding="utf-8")})
+        except OSError:
+            traceback.print_exc()
+    return {"files": files}
+
+
+@app.put("/api/opencad/workspace")
+async def update_opencad_workspace(req: OpenCadWorkspaceUpdate):
+    """Persist the OpenCAD workspace on the server."""
+    return _save_opencad_workspace(req.model_dump())
 
 
 @app.get("/api/settings")
@@ -582,7 +796,7 @@ async def get_profile_models(profile_name: str):
             models = [item.get("id") or item.get("name") for item in raw_models if isinstance(item, dict)]
             models = [m for m in models if m]
     except Exception:
-        pass
+        traceback.print_exc()
 
     # Fall back to known models from profile config
     if not models:
@@ -1726,6 +1940,8 @@ async def chat_with_agent(req: AgentChatRequest):
             agent_id = (req.agent_id or payload.get("active_agent_id") or "").strip()
             if agent_id:
                 agent = next((item for item in payload["agents"] if item.get("id") == agent_id), None)
+            profile_override = (req.profile or "").strip() or None
+            model_override = (req.model or "").strip() or None
 
             session_id = (req.session_id or "").strip() or f"session_{int(time.time() * 1000)}"
             conversation_token = None
@@ -1739,8 +1955,8 @@ async def chat_with_agent(req: AgentChatRequest):
                     "session_id": session_id,
                     "agent_id": agent_id or None,
                     "agent_name": agent.get("name") if agent else None,
-                    "agent_profile": agent.get("profile") if agent else None,
-                    "agent_model": agent.get("model") if agent else None,
+                    "agent_profile": profile_override or (agent.get("profile") if agent else None),
+                    "agent_model": model_override or (agent.get("model") if agent else None),
                 },
             )
             saved_session = session_storage.load_session_by_id(Path.cwd(), session_id)
@@ -1766,6 +1982,8 @@ async def chat_with_agent(req: AgentChatRequest):
             debug_log(f"Agent ID: {agent_id or '(default)'}")
             if agent:
                 debug_log(f"Agent profile: {agent.get('profile') or '(default)'}, model: {agent.get('model') or '(default)'}")
+            if profile_override or model_override:
+                debug_log(f"Request overrides: profile={profile_override or '(default)'}, model={model_override or '(default)'}")
             debug_log(f"Original message: {message}")
 
             def use_path_only_images_for_current_provider() -> bool:
@@ -2053,8 +2271,8 @@ async def chat_with_agent(req: AgentChatRequest):
             bundle = await build_runtime(
                 prompt="[Session initialized]",
                 cwd=str(Path.cwd()),
-                active_profile=agent.get("profile") if agent else None,
-                model=agent.get("model") if agent else None,
+                active_profile=profile_override or (agent.get("profile") if agent else None),
+                model=model_override or (agent.get("model") if agent else None),
                 max_turns=agent.get("max_turns") if agent else None,
                 system_prompt=agent.get("system_prompt") if agent else None,
                 restore_messages=restore_messages,
