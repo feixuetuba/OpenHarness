@@ -50,6 +50,8 @@ let openCadRenderWorkerReject = null;
 let openCadWorkerRequestSeq = 0;
 let openCadRenderInProgress = false;
 let openCadRenderStatusProtectedUntil = 0;
+let openCadDiffEditor = null;
+let openCadDiffModels = [];
 const OPENSCAD_WASM_MODULE_PATHS = [
   '/static/vendor/openscad/openscad.js',
   '/static/openscad/openscad.js',
@@ -159,17 +161,24 @@ async function loadOpenCadFiles() {
   }
 }
 
-function applyOpenCadWorkspacePayload(data) {
+function applyOpenCadWorkspacePayload(data, options = {}) {
   const files = Array.isArray(data?.files) ? data.files : [];
   if (!files.length) return;
-    openCadFiles = files
-      .filter(file => file && file.name)
-      .map(file => ({
-        id: file.id || makeOpenCadFileId(),
+  const currentById = new Map(openCadFiles.map(file => [file.id, file]));
+  openCadFiles = files
+    .filter(file => file && file.name)
+    .map(file => {
+      const id = file.id || makeOpenCadFileId();
+      const savedCode = unwrapOpenCadDragTranslateWrapper(String(file.code || ''));
+      const current = currentById.get(id);
+      return {
+        id,
         name: sanitizeOpenCadFileName(file.name),
-        code: unwrapOpenCadDragTranslateWrapper(String(file.code || '')),
+        code: options.preserveCurrentCode && current ? current.code || '' : savedCode,
+        savedCode,
         localPath: file.local_path || file.localPath || '',
-      }));
+      };
+    });
   const activeId = data?.active_file_id || '';
   openCadActiveFileId = openCadFiles.some(file => file.id === activeId) ? activeId : openCadFiles[0].id;
   saveOpenCadFiles({ remote: false });
@@ -185,6 +194,7 @@ function loadOpenCadFilesFromLocalStorage() {
           id: file.id || makeOpenCadFileId(),
           name: sanitizeOpenCadFileName(file.name),
           code: unwrapOpenCadDragTranslateWrapper(String(file.code || '')),
+          savedCode: unwrapOpenCadDragTranslateWrapper(String(file.savedCode ?? file.code ?? '')),
           localPath: file.localPath || '',
         }));
     }
@@ -196,6 +206,7 @@ function loadOpenCadFilesFromLocalStorage() {
       id: makeOpenCadFileId(),
       name: 'main.scad',
       code: localStorage.getItem('openharness.opencad.code') || OPENSCAD_SAMPLE,
+      savedCode: localStorage.getItem('openharness.opencad.code') || OPENSCAD_SAMPLE,
     }];
   }
   const savedActiveId = localStorage.getItem(OPENSCAD_ACTIVE_FILE_STORAGE_KEY) || '';
@@ -231,9 +242,10 @@ async function saveOpenCadWorkspaceToServer() {
       }),
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
-    const data = await res.json();
-    applyOpenCadWorkspacePayload(data);
+  const data = await res.json();
+    applyOpenCadWorkspacePayload(data, { preserveCurrentCode: true });
     renderOpenCadFileTabs();
+    refreshOpenCadDiffIfOpen();
     if (!openCadRenderInProgress && Date.now() > openCadRenderStatusProtectedUntil) {
       setOpenCadStatus('已保存到服务端');
     }
@@ -484,6 +496,105 @@ function syncOpenCadEditorToActiveFile() {
   return file.code;
 }
 
+function getOpenCadSavedCode(file) {
+  return String(file?.savedCode ?? '');
+}
+
+function isOpenCadFileDirty(file) {
+  if (!file) return false;
+  return String(file.code || '') !== getOpenCadSavedCode(file);
+}
+
+async function showOpenCadDiff() {
+  syncOpenCadEditorToActiveFile();
+  const file = getActiveOpenCadFile();
+  if (!file) return;
+  const modal = document.getElementById('openCadDiffModal');
+  const container = document.getElementById('openCadDiffContainer');
+  const title = document.getElementById('openCadDiffTitle');
+  const summary = document.getElementById('openCadDiffSummary');
+  if (!modal || !container) return;
+  try {
+    const monaco = await loadOpenCadMonaco();
+    registerOpenCadMonacoLanguage(monaco);
+    modal.classList.remove('hidden');
+    if (!openCadDiffEditor) {
+      openCadDiffEditor = monaco.editor.createDiffEditor(container, {
+        automaticLayout: true,
+        fontFamily: 'JetBrains Mono, Menlo, Monaco, Consolas, monospace',
+        fontSize: 13,
+        lineHeight: 20,
+        minimap: { enabled: false },
+        originalEditable: false,
+        renderSideBySide: true,
+        scrollBeyondLastLine: false,
+        theme: 'openharness-opencad-dark',
+        wordWrap: 'off',
+      });
+    }
+    setOpenCadDiffModels(file);
+    if (title) title.textContent = `${file.name} 的代码改动`;
+    if (summary) {
+      summary.textContent = isOpenCadFileDirty(file)
+        ? '左侧是服务端保存版本，右侧是当前编辑器内容'
+        : '当前编辑器内容与服务端保存版本一致';
+    }
+    setTimeout(() => openCadDiffEditor?.layout(), 0);
+  } catch (error) {
+    console.warn('Failed to open OpenCAD diff:', error);
+    setOpenCadStatus(`打开改动视图失败：${formatOpenCadError(error)}`, true);
+  }
+}
+
+function setOpenCadDiffModels(file = getActiveOpenCadFile()) {
+  if (!window.monaco?.editor || !openCadDiffEditor || !file) return;
+  disposeOpenCadDiffModels();
+  const stamp = Date.now().toString(36);
+  const original = window.monaco.editor.createModel(
+    getOpenCadSavedCode(file),
+    'openscad',
+    window.monaco.Uri.parse(`inmemory://openharness-opencad-diff/${encodeURIComponent(file.name)}.${stamp}.saved.scad`),
+  );
+  const modified = window.monaco.editor.createModel(
+    String(file.code || ''),
+    'openscad',
+    window.monaco.Uri.parse(`inmemory://openharness-opencad-diff/${encodeURIComponent(file.name)}.${stamp}.current.scad`),
+  );
+  openCadDiffModels = [original, modified];
+  openCadDiffEditor.setModel({ original, modified });
+}
+
+function refreshOpenCadDiffIfOpen() {
+  const modal = document.getElementById('openCadDiffModal');
+  if (!modal || modal.classList.contains('hidden') || !openCadDiffEditor) return;
+  const file = getActiveOpenCadFile();
+  if (!file) return;
+  setOpenCadDiffModels(file);
+  const summary = document.getElementById('openCadDiffSummary');
+  if (summary) {
+    summary.textContent = isOpenCadFileDirty(file)
+      ? '左侧是服务端保存版本，右侧是当前编辑器内容'
+      : '当前编辑器内容与服务端保存版本一致';
+  }
+}
+
+function closeOpenCadDiff() {
+  const modal = document.getElementById('openCadDiffModal');
+  if (modal) modal.classList.add('hidden');
+  disposeOpenCadDiffModels();
+}
+
+function disposeOpenCadDiffModels() {
+  for (const model of openCadDiffModels) {
+    try {
+      model.dispose();
+    } catch (error) {
+      console.debug('OpenCAD diff model dispose skipped:', error);
+    }
+  }
+  openCadDiffModels = [];
+}
+
 function buildOpenCadCompletionItems(monaco, model, position) {
   const importPathContext = getOpenCadImportPathContext(model, position);
   if (importPathContext) return buildOpenCadFileCompletionItems(monaco, position, importPathContext);
@@ -718,6 +829,8 @@ function handleOpenCadCodeInput() {
   const file = getActiveOpenCadFile();
   if (!file) return;
   file.code = getOpenCadEditorValue();
+  renderOpenCadFileTabs();
+  refreshOpenCadDiffIfOpen();
   scheduleOpenCadEditorSave();
   markOpenCadCodeDirty();
 }
@@ -791,12 +904,16 @@ function handleOpenCadEditorTab(textarea, outdent = false) {
 function renderOpenCadFileTabs() {
   const container = document.getElementById('openCadFileTabs');
   if (!container) return;
-  container.innerHTML = openCadFiles.map(file => `
+  container.innerHTML = openCadFiles.map(file => {
+    const dirty = isOpenCadFileDirty(file);
+    return `
     <button type="button" onclick="switchOpenCadFile('${file.id}')" class="open-cad-file-tab ${file.id === openCadActiveFileId ? 'active' : ''}" title="${openCadEscapeHtml(file.name)}">
       <span class="w-1.5 h-1.5 rounded-full ${file.id === openCadActiveFileId ? 'bg-accent-green' : 'bg-text-muted'} shrink-0"></span>
       <span class="open-cad-file-tab-name">${openCadEscapeHtml(file.name)}</span>
+      ${dirty ? '<span class="open-cad-file-dirty" title="有未保存到服务端的改动">•</span>' : ''}
     </button>
-  `).join('');
+  `;
+  }).join('');
   const panel = document.getElementById('openCadFilePanel');
   const collapsed = document.getElementById('openCadFilePanelCollapsed');
   if (panel && collapsed) {
@@ -827,7 +944,7 @@ function addOpenCadFile() {
     finalName = name.replace(/\.scad$/i, `-${counter}.scad`);
     counter += 1;
   }
-  const file = { id: makeOpenCadFileId(), name: finalName, code: '$fn = 48;\n\n' };
+  const file = { id: makeOpenCadFileId(), name: finalName, code: '$fn = 48;\n\n', savedCode: '' };
   openCadFiles.push(file);
   switchOpenCadFile(file.id);
 }
@@ -1290,15 +1407,19 @@ async function renderOpenCad() {
   openCadRenderStatusProtectedUntil = Date.now() + 8000;
   setOpenCadStatus(openCadWasmUnavailable ? '使用浏览器预览器渲染...' : 'OpenSCAD WASM 后台渲染中...');
   try {
-    const stl = await renderOpenCadWithWasm(code);
+    const renderResult = await renderOpenCadWithWasm(code);
     if (renderSeq !== openCadRenderSeq) return;
-    if (!stl || !stl.byteLength) throw new Error('OpenSCAD WASM 返回了空 STL');
+    const off = renderResult?.off;
+    const stl = renderResult?.stl || (renderResult instanceof Uint8Array ? renderResult : null);
+    if (!off?.byteLength && !stl?.byteLength) throw new Error('OpenSCAD WASM 返回了空网格');
     const stlColorInfo = getOpenCadStlPreviewColor(code);
-    const stlStats = showOpenCadStl(stl, { color: stlColorInfo?.color });
+    const stlStats = off?.byteLength
+      ? showOpenCadOff(off)
+      : showOpenCadStl(stl, { color: stlColorInfo?.color });
     clearOpenCadEditorMarkers();
     openCadRenderStatusProtectedUntil = Date.now() + 8000;
     openCadRenderInProgress = false;
-    setOpenCadStatus(`OpenSCAD WASM 渲染完成：${formatOpenCadBytes(stl.byteLength)}，${stlStats.triangles} 个三角面${getOpenCadStlColorNotice(stlColorInfo)}`, false, { clearError: true });
+    setOpenCadStatus(`OpenSCAD WASM 渲染完成：${formatOpenCadBytes(stlStats.bytes || off?.byteLength || stl?.byteLength)}，${stlStats.triangles} 个三角面${getOpenCadColorNotice(stlColorInfo, stlStats)}`, false, { clearError: true });
     return;
   } catch (error) {
     if (!isOpenCadWasmLoadError(error)) {
@@ -1388,7 +1509,7 @@ function formatOpenCadError(error) {
   return cleaned === '[object Object]' ? JSON.stringify(error) : cleaned;
 }
 
-async function renderOpenCadWithWorker(code) {
+async function renderOpenCadWithWorker(code, options = {}) {
   if (!window.Worker) {
     throw createOpenCadWasmLoadError('Web Worker is not supported');
   }
@@ -1435,8 +1556,9 @@ async function renderOpenCadWithWorker(code) {
       cleanup();
       if (data.type === 'result') {
         const stl = data.stl instanceof Uint8Array ? data.stl : new Uint8Array(data.stl || []);
-        openCadLastStl = stl;
-        resolve(stl);
+        const off = data.off instanceof Uint8Array ? data.off : new Uint8Array(data.off || []);
+        if (stl.byteLength) openCadLastStl = stl;
+        resolve({ stl, off });
       } else {
         reject(new Error(data.message || 'OpenSCAD WASM worker render failed'));
       }
@@ -1459,19 +1581,20 @@ async function renderOpenCadWithWorker(code) {
       activeFileName: activeFile?.name || 'input.scad',
       files: openCadFiles.map(file => ({ name: file.name, code: file.code || '' })),
       libraries,
+      outputFormat: options.outputFormat === 'stl' ? 'stl' : 'off',
     });
   });
 }
 
 function getOpenCadRenderWorker() {
   if (openCadRenderWorker) return openCadRenderWorker;
-  openCadRenderWorker = new Worker('/static/js/opencad.worker.js?v=20260612-manifold', { type: 'module' });
+  openCadRenderWorker = new Worker('/static/js/opencad.worker.js?v=20260612-off-colors', { type: 'module' });
   return openCadRenderWorker;
 }
 
-async function renderOpenCadWithWasm(code) {
+async function renderOpenCadWithWasm(code, options = {}) {
   try {
-    return await renderOpenCadWithWorker(code);
+    return await renderOpenCadWithWorker(code, options);
   } catch (error) {
     if (!isOpenCadWasmLoadError(error)) throw error;
     console.warn('OpenSCAD worker unavailable, falling back to main thread WASM:', error);
@@ -1483,13 +1606,15 @@ async function renderOpenCadWithWasm(code) {
     if (typeof openscad.renderToStl === 'function') {
       const stl = await openscad.renderToStl(code);
       openCadLastStl = stringToOpenCadBytes(stl);
-      return openCadLastStl;
+      return { stl: openCadLastStl };
     }
     throw new Error('OpenSCAD WASM instance is missing FS/callMain');
   }
   const activeFile = getActiveOpenCadFile();
   openCadWasmMessages = [];
-  cleanupOpenCadWasmFile(instance, '/output.stl');
+  const outputFormat = options.outputFormat === 'stl' ? 'stl' : 'off';
+  const outputPath = `/output.${outputFormat}`;
+  cleanupOpenCadWasmFile(instance, outputPath);
   await writeOpenCadLibrariesToWasm(instance);
   for (const file of openCadFiles) {
     const filePath = '/' + sanitizeOpenCadFileName(file.name);
@@ -1497,11 +1622,11 @@ async function renderOpenCadWithWasm(code) {
     instance.FS.writeFile(filePath, file.code || '');
   }
   const inputPath = '/' + sanitizeOpenCadFileName(activeFile?.name || 'input.scad');
-  const outputPath = '/output.stl';
   instance.FS.writeFile(inputPath, code);
   let exitCode = 0;
   try {
-    exitCode = instance.callMain([inputPath, '--backend=manifold', '-o', outputPath]);
+    const exportFormat = outputFormat === 'stl' ? 'binstl' : 'off';
+    exitCode = instance.callMain([inputPath, '--backend=manifold', '--export-format=' + exportFormat, '-o', outputPath]);
   } catch (error) {
     if (!instance.FS.analyzePath(outputPath).exists) {
       throw new Error(openCadWasmMessages.filter(Boolean).join('\n') || formatOpenCadError(error));
@@ -1511,8 +1636,12 @@ async function renderOpenCadWithWasm(code) {
     throw new Error(openCadWasmMessages.filter(Boolean).join('\n') || `OpenSCAD WASM exited with code ${exitCode}`);
   }
   const output = instance.FS.readFile(outputPath);
-  openCadLastStl = output instanceof Uint8Array ? output : stringToOpenCadBytes(output);
-  return openCadLastStl;
+  const bytes = output instanceof Uint8Array ? output : stringToOpenCadBytes(output);
+  if (outputFormat === 'stl') {
+    openCadLastStl = bytes;
+    return { stl: bytes };
+  }
+  return { off: bytes };
 }
 
 async function loadOpenCadLibraryFiles() {
@@ -1628,7 +1757,7 @@ function showOpenCadStl(bytes, options = {}) {
   openCadScene.add(openCadModelRoot);
   applyOpenCadWireframe();
   fitOpenCadCamera();
-  return { triangles };
+  return { triangles, bytes: bytes.byteLength || 0, coloredParts: 0 };
 }
 
 function formatOpenCadBytes(bytes) {
@@ -1636,6 +1765,106 @@ function formatOpenCadBytes(bytes) {
   if (size >= 1024 * 1024) return `${(size / 1024 / 1024).toFixed(1)} MB`;
   if (size >= 1024) return `${(size / 1024).toFixed(1)} KB`;
   return `${size} B`;
+}
+
+function showOpenCadOff(bytes) {
+  if (openCadModelRoot) openCadScene.remove(openCadModelRoot);
+  const parsed = parseOpenCadOff(bytes);
+  openCadModelRoot = new THREE.Group();
+  let triangles = 0;
+  for (const part of parsed.parts) {
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(part.positions), 3));
+    geometry.computeVertexNormals();
+    const color = new THREE.Color(part.color[0], part.color[1], part.color[2]);
+    const alpha = Number.isFinite(part.color[3]) ? part.color[3] : 1;
+    const material = new THREE.MeshStandardMaterial({
+      color,
+      roughness: 0.55,
+      metalness: 0.08,
+      opacity: alpha,
+      transparent: alpha < 1,
+    });
+    triangles += part.positions.length / 9;
+    openCadModelRoot.add(new THREE.Mesh(geometry, material));
+  }
+  if (!triangles) throw new Error('OFF 中没有可显示的三角面');
+  openCadScene.add(openCadModelRoot);
+  applyOpenCadWireframe();
+  fitOpenCadCamera();
+  return {
+    triangles,
+    bytes: bytes.byteLength || 0,
+    coloredParts: parsed.parts.length,
+    coloredFormat: 'off',
+  };
+}
+
+function parseOpenCadOff(bytes) {
+  const text = new TextDecoder().decode(bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes));
+  const lines = text.split(/\r?\n/)
+    .map(line => line.trim())
+    .filter(line => line && !line.startsWith('#'));
+  if (!lines.length) throw new Error('OFF 文件为空');
+  let cursor = 0;
+  let countsLine = '';
+  if (/^OFF(?:\s|$)/i.test(lines[cursor])) {
+    countsLine = lines[cursor].replace(/^OFF/i, '').trim();
+    cursor += 1;
+  } else {
+    throw new Error('OFF 文件缺少 OFF 头');
+  }
+  if (!countsLine) {
+    countsLine = lines[cursor] || '';
+    cursor += 1;
+  }
+  const [vertexCount, faceCount] = countsLine.split(/\s+/).map(Number);
+  if (!Number.isFinite(vertexCount) || !Number.isFinite(faceCount)) {
+    throw new Error('OFF 顶点/面数量无效');
+  }
+  const vertices = [];
+  for (let index = 0; index < vertexCount; index += 1) {
+    const values = (lines[cursor + index] || '').split(/\s+/).map(Number);
+    if (values.length < 3 || values.slice(0, 3).some(value => !Number.isFinite(value))) {
+      throw new Error(`OFF 顶点无效：第 ${cursor + index + 1} 行`);
+    }
+    vertices.push([values[0], values[1], values[2]]);
+  }
+  cursor += vertexCount;
+  const groups = new Map();
+  for (let index = 0; index < faceCount; index += 1) {
+    const values = (lines[cursor + index] || '').split(/\s+/).map(Number);
+    const count = values[0];
+    if (!Number.isFinite(count) || count < 3) continue;
+    const faceVertices = values.slice(1, count + 1);
+    const color = normalizeOpenCadOffColor(values.slice(count + 1));
+    const key = color.map(value => value.toFixed(4)).join(',');
+    if (!groups.has(key)) groups.set(key, { color, positions: [] });
+    const group = groups.get(key);
+    for (let tri = 1; tri < faceVertices.length - 1; tri += 1) {
+      for (const vertexIndex of [faceVertices[0], faceVertices[tri], faceVertices[tri + 1]]) {
+        const vertex = vertices[vertexIndex];
+        if (!vertex) continue;
+        group.positions.push(vertex[0], vertex[1], vertex[2]);
+      }
+    }
+  }
+  return { parts: [...groups.values()].filter(part => part.positions.length >= 9) };
+}
+
+function normalizeOpenCadOffColor(values) {
+  if (!values || values.length < 3 || values.slice(0, 3).some(value => !Number.isFinite(value))) {
+    return [0xf9 / 255, 0xd7 / 255, 0x2c / 255, 1];
+  }
+  const rgbScale = values.slice(0, 3).some(value => value > 1) ? 255 : 1;
+  const alphaScale = Number.isFinite(values[3]) && values[3] > 1 ? 255 : 1;
+  const color = [
+    Math.max(0, Math.min(1, values[0] / rgbScale)),
+    Math.max(0, Math.min(1, values[1] / rgbScale)),
+    Math.max(0, Math.min(1, values[2] / rgbScale)),
+    Number.isFinite(values[3]) ? Math.max(0, Math.min(1, values[3] / alphaScale)) : 1,
+  ];
+  return color;
 }
 
 function getOpenCadStlPreviewColor(code) {
@@ -1648,7 +1877,8 @@ function getOpenCadStlPreviewColor(code) {
   return { color, count: matches.length };
 }
 
-function getOpenCadStlColorNotice(colorInfo) {
+function getOpenCadColorNotice(colorInfo, stats = {}) {
+  if (stats.coloredFormat === 'off') return `；已按 OFF 面颜色显示 ${stats.coloredParts} 个材质分组`;
   if (!colorInfo) return '';
   if (colorInfo.count > 1) return '；STL 预览仅使用第一个 color()，多色材质不会写入 STL';
   return '；STL 预览已应用 color()，但材质不会写入 STL';
@@ -1825,17 +2055,28 @@ function downloadOpenCadCode() {
   URL.revokeObjectURL(link.href);
 }
 
-function downloadOpenCadStl() {
-  if (!openCadLastStl) {
-    setOpenCadStatus('还没有可下载的 STL，请先等待 WASM 渲染完成', true);
-    return;
+async function downloadOpenCadStl() {
+  syncOpenCadEditorToActiveFile();
+  const file = getActiveOpenCadFile();
+  const code = getOpenCadEditorValue() || file?.code || '';
+  try {
+    setOpenCadStatus('OpenSCAD WASM 后台导出 STL...');
+    const result = await renderOpenCadWithWasm(code, { outputFormat: 'stl' });
+    const stl = result?.stl || result;
+    if (!stl?.byteLength) throw new Error('OpenSCAD WASM 返回了空 STL');
+    openCadLastStl = stl;
+    const blob = new Blob([openCadLastStl], { type: 'model/stl' });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = sanitizeOpenCadFileName(file?.name || 'openharness-model.scad').replace(/\.scad$/i, '.stl');
+    link.click();
+    URL.revokeObjectURL(link.href);
+    setOpenCadStatus('STL 已导出', false, { clearError: true });
+  } catch (error) {
+    const message = formatOpenCadError(error);
+    setOpenCadEditorMarkers(message);
+    setOpenCadStatus(`OpenSCAD WASM 导出 STL 失败：${message}`, true);
   }
-  const blob = new Blob([openCadLastStl], { type: 'model/stl' });
-  const link = document.createElement('a');
-  link.href = URL.createObjectURL(blob);
-  link.download = 'openharness-model.stl';
-  link.click();
-  URL.revokeObjectURL(link.href);
 }
 
 function askAgentForOpenCad() {

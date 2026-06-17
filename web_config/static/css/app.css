@@ -473,6 +473,68 @@ textarea::placeholder {
   font-family: 'JetBrains Mono', monospace;
 }
 
+.open-cad-diff-modal {
+  align-items: stretch;
+  background: rgba(2, 6, 23, 0.72);
+  inset: 0;
+  padding: 24px;
+  position: absolute;
+  z-index: 40;
+}
+
+.open-cad-diff-modal:not(.hidden) {
+  display: flex;
+}
+
+.open-cad-diff-panel {
+  background: #0f172a;
+  border: 1px solid #334155;
+  border-radius: 8px;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.42);
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.open-cad-diff-header {
+  align-items: center;
+  background: #141b2d;
+  border-bottom: 1px solid #334155;
+  display: flex;
+  gap: 16px;
+  justify-content: space-between;
+  padding: 12px 14px;
+}
+
+.open-cad-diff-title {
+  color: #f1f5f9;
+  font-size: 13px;
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.open-cad-diff-summary {
+  color: #94a3b8;
+  font-size: 12px;
+  margin-top: 2px;
+}
+
+.open-cad-diff-container {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.open-cad-file-dirty {
+  color: #fbbf24;
+  flex: 0 0 auto;
+  font-size: 14px;
+  line-height: 1;
+}
+
 #openCadViewport canvas {
   display: block;
   height: 100% !important;

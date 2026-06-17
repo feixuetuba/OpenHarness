@@ -1213,6 +1213,7 @@
                 <button onclick="renderOpenCad()" class="btn-primary text-xs px-3 py-1.5">渲染</button>
                 <button onclick="resetOpenCadCode()" class="btn-secondary text-xs px-3 py-1.5">示例</button>
                 <button onclick="copyOpenCadCode()" class="btn-secondary text-xs px-3 py-1.5">复制代码</button>
+                <button onclick="showOpenCadDiff()" class="btn-secondary text-xs px-3 py-1.5">查看改动</button>
                 <button onclick="downloadOpenCadCode()" class="btn-secondary text-xs px-3 py-1.5">下载 .scad</button>
                 <button onclick="downloadOpenCadStl()" class="btn-secondary text-xs px-3 py-1.5">下载 STL</button>
                 <button onclick="addOpenCadFile()" class="btn-secondary text-xs px-3 py-1.5">新文件</button>
@@ -1291,6 +1292,21 @@
                 </svg>
               </div>
             </div>
+          </div>
+        </div>
+        <div id="openCadDiffModal" class="open-cad-diff-modal hidden" role="dialog" aria-modal="true" aria-label="OpenSCAD 代码改动">
+          <div class="open-cad-diff-panel">
+            <div class="open-cad-diff-header">
+              <div class="min-w-0">
+                <div id="openCadDiffTitle" class="open-cad-diff-title">代码改动</div>
+                <div id="openCadDiffSummary" class="open-cad-diff-summary">服务端保存版本 ↔ 当前编辑器内容</div>
+              </div>
+              <div class="flex gap-2 shrink-0">
+                <button onclick="saveOpenCadFiles({ immediate: true })" class="btn-primary text-xs px-3 py-1.5">保存当前版本</button>
+                <button onclick="closeOpenCadDiff()" class="btn-secondary text-xs px-3 py-1.5">关闭</button>
+              </div>
+            </div>
+            <div id="openCadDiffContainer" class="open-cad-diff-container"></div>
           </div>
         </div>
       </div>

@@ -20,12 +20,8 @@ async function renderOpenCad(request) {
   reportOpenCadProgress(request.id, '加载 OpenSCAD WASM');
   const createOpenScad = await loadOpenCadWasmFactory();
   reportOpenCadProgress(request.id, '初始化 OpenSCAD 实例');
-  const openscad = await createOpenScad({
-    noInitialRun: true,
-    print: text => messages.push(String(text || '')),
-    printErr: text => messages.push(String(text || '')),
-  });
-  const instance = typeof openscad.getInstance === 'function' ? openscad.getInstance() : openscad.instance || openscad;
+  const openscad = await createOpenScad(makeOpenCadWorkerOptions(messages));
+  const instance = getOpenCadWasmInstance(openscad);
   if (!instance?.FS || typeof instance.callMain !== 'function') {
     if (typeof openscad.renderToStl === 'function') {
       reportOpenCadProgress(request.id, '调用 renderToStl');
@@ -37,23 +33,19 @@ async function renderOpenCad(request) {
   }
 
   reportOpenCadProgress(request.id, `写入库文件 ${Number(request.libraries?.length || 0)} 个`);
-  await writeOpenCadLibrariesToWasm(instance, request.libraries || []);
-  reportOpenCadProgress(request.id, `写入工作区文件 ${Number(request.files?.length || 0)} 个`);
-  for (const file of request.files || []) {
-    const filePath = '/' + sanitizeOpenCadFileName(file.name);
-    cleanupOpenCadWasmFile(instance, filePath);
-    instance.FS.writeFile(filePath, String(file.code || ''));
-  }
+  await writeOpenCadRequestFiles(instance, request);
 
   const inputPath = '/' + sanitizeOpenCadFileName(request.activeFileName || 'input.scad');
-  const outputPath = '/output.stl';
+  const outputFormat = request.outputFormat === 'stl' ? 'stl' : 'off';
+  const outputPath = `/output.${outputFormat}`;
   cleanupOpenCadWasmFile(instance, outputPath);
   instance.FS.writeFile(inputPath, String(request.code || ''));
 
   let exitCode = 0;
   try {
-    reportOpenCadProgress(request.id, 'OpenSCAD Manifold 编译 STL');
-    exitCode = instance.callMain([inputPath, '--backend=manifold', '-o', outputPath]);
+    reportOpenCadProgress(request.id, `OpenSCAD Manifold 编译 ${outputFormat.toUpperCase()}`);
+    const exportFormat = outputFormat === 'stl' ? 'binstl' : 'off';
+    exitCode = instance.callMain([inputPath, '--backend=manifold', '--export-format=' + exportFormat, '-o', outputPath]);
   } catch (error) {
     if (!instance.FS.analyzePath(outputPath).exists) {
       throw new Error(messages.filter(Boolean).join('\n') || formatOpenCadWorkerError(error));
@@ -63,14 +55,39 @@ async function renderOpenCad(request) {
     throw new Error(messages.filter(Boolean).join('\n') || `OpenSCAD WASM exited with code ${exitCode}`);
   }
 
-  reportOpenCadProgress(request.id, '读取 STL 网格');
+  reportOpenCadProgress(request.id, `读取 ${outputFormat.toUpperCase()} 网格`);
   const output = instance.FS.readFile(outputPath);
-  const stl = output instanceof Uint8Array ? output.slice() : stringToOpenCadBytes(output);
-  self.postMessage({ type: 'result', id: request.id, stl }, [stl.buffer]);
+  const bytes = output instanceof Uint8Array ? output.slice() : stringToOpenCadBytes(output);
+  if (outputFormat === 'stl') {
+    self.postMessage({ type: 'result', id: request.id, stl: bytes }, [bytes.buffer]);
+    return;
+  }
+  self.postMessage({ type: 'result', id: request.id, off: bytes }, [bytes.buffer]);
 }
 
 function reportOpenCadProgress(id, message) {
   self.postMessage({ type: 'progress', id, message });
+}
+
+function makeOpenCadWorkerOptions(messages) {
+  return {
+    noInitialRun: true,
+    print: text => messages.push(String(text || '')),
+    printErr: text => messages.push(String(text || '')),
+  };
+}
+
+function getOpenCadWasmInstance(openscad) {
+  return typeof openscad.getInstance === 'function' ? openscad.getInstance() : openscad.instance || openscad;
+}
+
+async function writeOpenCadRequestFiles(instance, request) {
+  await writeOpenCadLibrariesToWasm(instance, request.libraries || []);
+  for (const file of request.files || []) {
+    const filePath = '/' + sanitizeOpenCadFileName(file.name);
+    cleanupOpenCadWasmFile(instance, filePath);
+    instance.FS.writeFile(filePath, String(file.code || ''));
+  }
 }
 
 async function loadOpenCadWasmFactory() {
