@@ -414,7 +414,7 @@ function registerOpenCadMonacoLanguage(monaco) {
     },
   });
   monaco.languages.registerCompletionItemProvider('openscad', {
-    triggerCharacters: ['<', '"', '(', '.'],
+    triggerCharacters: ['<', '"', '(', '.', '$', '_'],
     provideCompletionItems: async (model, position) => ({
       suggestions: await buildOpenCadCompletionItems(monaco, model, position),
     }),
@@ -605,8 +605,6 @@ async function buildOpenCadCompletionItems(monaco, model, position) {
   const importPathContext = getOpenCadImportPathContext(model, position);
   await ensureOpenCadLibrarySymbolsLoaded();
   if (importPathContext) return buildOpenCadFileCompletionItems(monaco, position, importPathContext);
-  const callContext = getOpenCadCallContext(model, position);
-  if (callContext) return buildOpenCadArgumentCompletionItems(monaco, position, callContext.name);
   const range = model.getWordUntilPosition(position);
   const replaceRange = {
     startLineNumber: position.lineNumber,
@@ -614,6 +612,14 @@ async function buildOpenCadCompletionItems(monaco, model, position) {
     startColumn: range.startColumn,
     endColumn: range.endColumn,
   };
+  const indexed = getOpenCadSymbolIndex(model);
+  const callContext = getOpenCadCallContext(model, position);
+  if (callContext) {
+    return [
+      ...buildOpenCadArgumentCompletionItems(monaco, position, callContext.name, replaceRange),
+      ...buildOpenCadSymbolCompletionItems(monaco, replaceRange, indexed, { includeCallables: false }),
+    ];
+  }
   const snippet = monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet;
   const suggestions = [
     ['cube', 'cube([${1:10}, ${2:10}, ${3:10}], center=${4:true});'],
@@ -646,32 +652,46 @@ async function buildOpenCadCompletionItems(monaco, model, position) {
       range: replaceRange,
     });
   }
-  const indexed = getOpenCadSymbolIndex(model);
-  const existingLabels = new Set(suggestions.map(item => String(item.label)));
-  for (const symbol of indexed.callables) {
-    if (existingLabels.has(symbol.name)) continue;
-    existingLabels.add(symbol.name);
-    const params = symbol.parameters.map(param => param.name).filter(Boolean);
-    suggestions.push({
-      label: symbol.name,
-      kind: symbol.kind === 'module' ? monaco.languages.CompletionItemKind.Function : monaco.languages.CompletionItemKind.Method,
-      insertText: `${symbol.name}(${params.map((param, index) => `${param}=\${${index + 1}}`).join(', ')});`,
-      insertTextRules: snippet,
-      detail: `${symbol.kind} from ${symbol.source}`,
-      documentation: symbol.label,
-      range: replaceRange,
-    });
+  suggestions.push(...buildOpenCadSymbolCompletionItems(monaco, replaceRange, indexed, {
+    existingLabels: new Set(suggestions.map(item => String(item.label))),
+  }));
+  return suggestions;
+}
+
+function buildOpenCadSymbolCompletionItems(monaco, replaceRange, indexed, options = {}) {
+  const includeCallables = options.includeCallables !== false;
+  const includeVariables = options.includeVariables !== false;
+  const existingLabels = options.existingLabels || new Set();
+  const snippet = monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet;
+  const suggestions = [];
+  if (includeCallables) {
+    for (const symbol of indexed.callables) {
+      if (existingLabels.has(symbol.name)) continue;
+      existingLabels.add(symbol.name);
+      const params = symbol.parameters.map(param => param.name).filter(Boolean);
+      suggestions.push({
+        label: symbol.name,
+        kind: symbol.kind === 'module' ? monaco.languages.CompletionItemKind.Function : monaco.languages.CompletionItemKind.Method,
+        insertText: `${symbol.name}(${params.map((param, index) => `${param}=\${${index + 1}}`).join(', ')});`,
+        insertTextRules: snippet,
+        detail: `${symbol.kind} from ${symbol.source}`,
+        documentation: symbol.label,
+        range: replaceRange,
+      });
+    }
   }
-  for (const variable of indexed.variables) {
-    if (existingLabels.has(variable.name)) continue;
-    existingLabels.add(variable.name);
-    suggestions.push({
-      label: variable.name,
-      kind: monaco.languages.CompletionItemKind.Variable,
-      insertText: variable.name,
-      detail: `variable from ${variable.source}`,
-      range: replaceRange,
-    });
+  if (includeVariables) {
+    for (const variable of indexed.variables) {
+      if (existingLabels.has(variable.name)) continue;
+      existingLabels.add(variable.name);
+      suggestions.push({
+        label: variable.name,
+        kind: monaco.languages.CompletionItemKind.Variable,
+        insertText: variable.name,
+        detail: `variable from ${variable.source}`,
+        range: replaceRange,
+      });
+    }
   }
   return suggestions;
 }
@@ -701,7 +721,7 @@ function buildOpenCadFileCompletionItems(monaco, position, context) {
   return suggestions;
 }
 
-function buildOpenCadArgumentCompletionItems(monaco, position, functionName) {
+function buildOpenCadArgumentCompletionItems(monaco, position, functionName, fallbackRange = null) {
   const signature = getOpenCadSignature(functionName);
   if (!signature?.parameters?.length) return [];
   const model = openCadEditor?.getModel();
@@ -712,12 +732,12 @@ function buildOpenCadArgumentCompletionItems(monaco, position, functionName) {
     startColumn: wordRange?.startColumn || position.column,
     endColumn: position.column,
   }).trim() : '';
-  if (!currentWord) return [];
+  if (!currentWord && !fallbackRange) return [];
   const replaceRange = {
     startLineNumber: position.lineNumber,
     endLineNumber: position.lineNumber,
-    startColumn: wordRange?.startColumn || position.column,
-    endColumn: wordRange?.endColumn || position.column,
+    startColumn: wordRange?.startColumn || fallbackRange?.startColumn || position.column,
+    endColumn: wordRange?.endColumn || fallbackRange?.endColumn || position.column,
   };
   return signature.parameters.map(param => ({
     label: `${param}=`,
