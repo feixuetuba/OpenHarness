@@ -606,20 +606,29 @@ async def get_opencad_workspace_file(file_key: str):
 
 @app.get("/api/opencad/libraries")
 async def get_opencad_libraries():
-    """Get bundled OpenSCAD library files for the WASM virtual FS."""
-    root = _get_opencad_libraries_dir()
-    files: list[dict[str, str]] = []
-    if not root.exists():
-        return {"files": []}
-    for path in sorted(root.rglob("*.scad")):
-        if not path.is_file():
-            continue
-        try:
-            rel = path.relative_to(root).as_posix()
-            files.append({"path": rel, "content": path.read_text(encoding="utf-8")})
-        except OSError:
-            traceback.print_exc()
-    return {"files": files}
+    """Get OpenSCAD library files for the WASM virtual FS and editor index."""
+    files_by_path: dict[str, str] = {}
+
+    def collect_scad_files(root: Path) -> None:
+        if not root.exists():
+            return
+        for path in sorted(root.rglob("*.scad")):
+            if not path.is_file():
+                continue
+            try:
+                rel = path.relative_to(root).as_posix()
+                files_by_path[rel] = path.read_text(encoding="utf-8")
+            except Exception:
+                traceback.print_exc()
+
+    collect_scad_files(_get_opencad_libraries_dir())
+    collect_scad_files(_get_opencad_workspace_libraries_dir())
+    return {
+        "files": [
+            {"path": path, "content": content}
+            for path, content in sorted(files_by_path.items())
+        ]
+    }
 
 
 @app.put("/api/opencad/workspace")

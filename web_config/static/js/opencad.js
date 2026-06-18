@@ -52,6 +52,9 @@ let openCadRenderInProgress = false;
 let openCadRenderStatusProtectedUntil = 0;
 let openCadDiffEditor = null;
 let openCadDiffModels = [];
+let openCadLibrarySymbolFiles = [];
+let openCadLibrarySymbolsLoading = false;
+let openCadLibrarySymbolsPromise = null;
 const OPENSCAD_WASM_MODULE_PATHS = [
   '/static/vendor/openscad/openscad.js',
   '/static/openscad/openscad.js',
@@ -164,6 +167,7 @@ async function loadOpenCadFiles() {
 function applyOpenCadWorkspacePayload(data, options = {}) {
   const files = Array.isArray(data?.files) ? data.files : [];
   if (!files.length) return;
+  resetOpenCadLibrarySymbolIndex();
   const currentById = new Map(openCadFiles.map(file => [file.id, file]));
   openCadFiles = files
     .filter(file => file && file.name)
@@ -242,7 +246,8 @@ async function saveOpenCadWorkspaceToServer() {
       }),
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
-  const data = await res.json();
+    const data = await res.json();
+    resetOpenCadLibrarySymbolIndex();
     applyOpenCadWorkspacePayload(data, { preserveCurrentCode: true });
     renderOpenCadFileTabs();
     refreshOpenCadDiffIfOpen();
@@ -297,6 +302,7 @@ async function initOpenCadEditor() {
       saveOpenCadFiles({ immediate: true });
       if (!openCadRenderInProgress) setOpenCadStatus('已保存到服务端');
     });
+    ensureOpenCadLibrarySymbolsLoaded();
     if (fallback) fallback.classList.add('hidden');
   } catch (error) {
     console.warn('Failed to initialize Monaco editor:', error);
@@ -409,8 +415,8 @@ function registerOpenCadMonacoLanguage(monaco) {
   });
   monaco.languages.registerCompletionItemProvider('openscad', {
     triggerCharacters: ['<', '"', '(', '.'],
-    provideCompletionItems: (model, position) => ({
-      suggestions: buildOpenCadCompletionItems(monaco, model, position),
+    provideCompletionItems: async (model, position) => ({
+      suggestions: await buildOpenCadCompletionItems(monaco, model, position),
     }),
   });
   monaco.languages.registerSignatureHelpProvider('openscad', {
@@ -595,8 +601,9 @@ function disposeOpenCadDiffModels() {
   openCadDiffModels = [];
 }
 
-function buildOpenCadCompletionItems(monaco, model, position) {
+async function buildOpenCadCompletionItems(monaco, model, position) {
   const importPathContext = getOpenCadImportPathContext(model, position);
+  await ensureOpenCadLibrarySymbolsLoaded();
   if (importPathContext) return buildOpenCadFileCompletionItems(monaco, position, importPathContext);
   const callContext = getOpenCadCallContext(model, position);
   if (callContext) return buildOpenCadArgumentCompletionItems(monaco, position, callContext.name);
@@ -639,6 +646,33 @@ function buildOpenCadCompletionItems(monaco, model, position) {
       range: replaceRange,
     });
   }
+  const indexed = getOpenCadSymbolIndex(model);
+  const existingLabels = new Set(suggestions.map(item => String(item.label)));
+  for (const symbol of indexed.callables) {
+    if (existingLabels.has(symbol.name)) continue;
+    existingLabels.add(symbol.name);
+    const params = symbol.parameters.map(param => param.name).filter(Boolean);
+    suggestions.push({
+      label: symbol.name,
+      kind: symbol.kind === 'module' ? monaco.languages.CompletionItemKind.Function : monaco.languages.CompletionItemKind.Method,
+      insertText: `${symbol.name}(${params.map((param, index) => `${param}=\${${index + 1}}`).join(', ')});`,
+      insertTextRules: snippet,
+      detail: `${symbol.kind} from ${symbol.source}`,
+      documentation: symbol.label,
+      range: replaceRange,
+    });
+  }
+  for (const variable of indexed.variables) {
+    if (existingLabels.has(variable.name)) continue;
+    existingLabels.add(variable.name);
+    suggestions.push({
+      label: variable.name,
+      kind: monaco.languages.CompletionItemKind.Variable,
+      insertText: variable.name,
+      detail: `variable from ${variable.source}`,
+      range: replaceRange,
+    });
+  }
   return suggestions;
 }
 
@@ -655,15 +689,7 @@ function buildOpenCadFileCompletionItems(monaco, position, context) {
     insertText: file.name,
     range: replaceRange,
   }));
-  const libraryPaths = [
-    'MCAD/gears.scad',
-    'MCAD/boxes.scad',
-    'MCAD/constants.scad',
-    'MCAD/bearing.scad',
-    'MCAD/stepper.scad',
-    'MCAD/servos.scad',
-    'MCAD/nuts_and_bolts.scad',
-  ];
+  const libraryPaths = getOpenCadLibraryCompletionPaths();
   for (const path of libraryPaths) {
     suggestions.push({
       label: path,
@@ -720,14 +746,17 @@ function buildOpenCadSignatureHelp(model, position) {
 }
 
 function getOpenCadSignature(name) {
-  const key = String(name || '').toLowerCase();
+  const rawName = String(name || '');
+  const key = rawName.toLowerCase();
   if (OPENSCAD_SIGNATURES[key]) return OPENSCAD_SIGNATURES[key];
-  const activeCode = getOpenCadEditorValue();
-  const moduleRegex = new RegExp(`\\b(?:module|function)\\s+${escapeOpenCadRegex(key)}\\s*\\(([^)]*)\\)`, 'i');
-  const match = activeCode.match(moduleRegex);
-  if (!match) return null;
-  const params = match[1].split(',').map(part => part.trim().replace(/\s*=.*$/, '')).filter(Boolean);
-  return { label: `${name}(${params.join(', ')})`, parameters: params };
+  const symbol = getOpenCadSymbolIndex(openCadEditor?.getModel()).callables
+    .find(item => item.name.toLowerCase() === key);
+  if (!symbol) return null;
+  return {
+    label: symbol.label,
+    documentation: symbol.source ? `Defined in ${symbol.source}` : '',
+    parameters: symbol.parameters.map(param => param.name).filter(Boolean),
+  };
 }
 
 function getOpenCadImportPathContext(model, position) {
@@ -786,6 +815,198 @@ function countOpenCadTopLevelCommas(text) {
 
 function escapeOpenCadRegex(value) {
   return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function getOpenCadSymbolIndex(model = openCadEditor?.getModel()) {
+  const files = openCadFiles.map(file => {
+    const isActive = file.id === openCadActiveFileId;
+    const activeModel = isActive ? model : openCadEditorModels.get(file.id);
+    return {
+      name: file.name,
+      code: activeModel ? activeModel.getValue() : String(file.code || ''),
+      kind: 'workspace',
+    };
+  });
+  files.push(...openCadLibrarySymbolFiles);
+  const callables = [];
+  const variables = [];
+  const seenCallables = new Set();
+  const seenVariables = new Set();
+
+  for (const file of files) {
+    const symbols = parseOpenCadSymbols(file.code, file.name, file.kind);
+    for (const symbol of symbols.callables) {
+      const key = `${symbol.name.toLowerCase()}:${symbol.source}`;
+      if (seenCallables.has(key)) continue;
+      seenCallables.add(key);
+      callables.push(symbol);
+    }
+    for (const variable of symbols.variables) {
+      const key = `${variable.name}:${variable.source}`;
+      if (seenVariables.has(key)) continue;
+      seenVariables.add(key);
+      variables.push(variable);
+    }
+  }
+  return { callables, variables };
+}
+
+function parseOpenCadSymbols(code, source = '', sourceKind = 'workspace') {
+  const cleaned = stripOpenCadComments(code);
+  const callables = [];
+  const variables = [];
+  const callableRegex = /\b(module|function)\s+([A-Za-z_]\w*)\s*\(([^)]*)\)/g;
+  let match;
+  while ((match = callableRegex.exec(cleaned))) {
+    const params = parseOpenCadParameterList(match[3]);
+    callables.push({
+      kind: match[1],
+      name: match[2],
+      source,
+      sourceKind,
+      parameters: params,
+      label: `${match[2]}(${params.map(param => param.label).join(', ')})`,
+    });
+  }
+
+  let depth = 0;
+  for (const line of cleaned.split('\n')) {
+    const startDepth = depth;
+    const variableMatch = startDepth === 0 ? line.match(/^\s*([$A-Za-z_][\w$]*)\s*=/) : null;
+    if (variableMatch && !['module', 'function'].includes(variableMatch[1])) {
+      variables.push({ name: variableMatch[1], source, sourceKind });
+    }
+    depth = updateOpenCadBraceDepth(depth, line);
+  }
+
+  return { callables, variables };
+}
+
+function stripOpenCadComments(code) {
+  return String(code || '')
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/\/\/.*$/gm, '');
+}
+
+function parseOpenCadParameterList(paramText) {
+  return splitOpenCadTopLevel(paramText, ',')
+    .map(part => part.trim())
+    .filter(Boolean)
+    .map(part => {
+      const equalsIndex = findOpenCadTopLevelChar(part, '=');
+      const label = part.trim();
+      const name = (equalsIndex >= 0 ? part.slice(0, equalsIndex) : part).trim();
+      return { name, label };
+    })
+    .filter(param => /^[$A-Za-z_][\w$]*$/.test(param.name));
+}
+
+function splitOpenCadTopLevel(text, delimiter = ',') {
+  const parts = [];
+  let depth = 0;
+  let quote = '';
+  let start = 0;
+  const value = String(text || '');
+  for (let index = 0; index < value.length; index += 1) {
+    const ch = value[index];
+    if (quote) {
+      if (ch === quote && value[index - 1] !== '\\') quote = '';
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+      continue;
+    }
+    if (ch === '(' || ch === '[' || ch === '{') depth += 1;
+    if (ch === ')' || ch === ']' || ch === '}') depth = Math.max(0, depth - 1);
+    if (ch === delimiter && depth === 0) {
+      parts.push(value.slice(start, index));
+      start = index + 1;
+    }
+  }
+  parts.push(value.slice(start));
+  return parts;
+}
+
+function findOpenCadTopLevelChar(text, target) {
+  let depth = 0;
+  let quote = '';
+  const value = String(text || '');
+  for (let index = 0; index < value.length; index += 1) {
+    const ch = value[index];
+    if (quote) {
+      if (ch === quote && value[index - 1] !== '\\') quote = '';
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+      continue;
+    }
+    if (ch === '(' || ch === '[' || ch === '{') depth += 1;
+    if (ch === ')' || ch === ']' || ch === '}') depth = Math.max(0, depth - 1);
+    if (ch === target && depth === 0) return index;
+  }
+  return -1;
+}
+
+function updateOpenCadBraceDepth(depth, line) {
+  let nextDepth = depth;
+  let quote = '';
+  for (const ch of String(line || '')) {
+    if (quote) {
+      if (ch === quote) quote = '';
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+      continue;
+    }
+    if (ch === '{') nextDepth += 1;
+    if (ch === '}') nextDepth = Math.max(0, nextDepth - 1);
+  }
+  return nextDepth;
+}
+
+async function ensureOpenCadLibrarySymbolsLoaded() {
+  if (openCadLibrarySymbolFiles.length) return;
+  if (openCadLibrarySymbolsPromise) return openCadLibrarySymbolsPromise;
+  openCadLibrarySymbolsLoading = true;
+  openCadLibrarySymbolsPromise = loadOpenCadLibraryFiles()
+    .then(files => {
+      openCadLibrarySymbolFiles = files
+        .map(file => ({
+          name: sanitizeOpenCadLibraryPath(file.path),
+          code: String(file.content || ''),
+          kind: 'library',
+        }))
+        .filter(file => file.name);
+    })
+    .finally(() => {
+      openCadLibrarySymbolsLoading = false;
+      openCadLibrarySymbolsPromise = null;
+    });
+  return openCadLibrarySymbolsPromise;
+}
+
+function resetOpenCadLibrarySymbolIndex() {
+  openCadLibraryFilesPromise = null;
+  openCadLibrarySymbolFiles = [];
+  openCadLibrarySymbolsPromise = null;
+  openCadLibrarySymbolsLoading = false;
+}
+
+function getOpenCadLibraryCompletionPaths() {
+  const paths = openCadLibrarySymbolFiles.map(file => file.name).filter(Boolean);
+  if (paths.length) return paths;
+  return [
+    'MCAD/gears.scad',
+    'MCAD/boxes.scad',
+    'MCAD/constants.scad',
+    'MCAD/bearing.scad',
+    'MCAD/stepper.scad',
+    'MCAD/servos.scad',
+    'MCAD/nuts_and_bolts.scad',
+  ];
 }
 
 function clearOpenCadEditorMarkers() {
