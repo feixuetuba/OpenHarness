@@ -1,9 +1,11 @@
 let openCadInitialized = false;
 let openCadRenderTimer = null;
 let openCadScene = null;
+let openCadInteractionScene = null;
 let openCadCamera = null;
 let openCadRenderer = null;
 let openCadModelRoot = null;
+let openCadInteractionRoot = null;
 let openCadWireframe = false;
 let openCadRenderSeq = 0;
 let openCadWasmFactoryPromise = null;
@@ -25,6 +27,16 @@ let openCadControls = {
   dragObject: null,
   dragStartObjectPosition: null,
   dragSourceIndex: null,
+  guiDragStartPoint: null,
+  guiDragCurrentPoint: null,
+  guiDragObject: null,
+  guiDragObjectStartPosition: null,
+  guiDragObjectStartRotation: null,
+  guiDragObjectStartScale: null,
+  guiDragStartX: 0,
+  guiDragStartY: 0,
+  guiDragDeltaX: 0,
+  guiDragDeltaY: 0,
 };
 let openCadFiles = [];
 let openCadActiveFileId = '';
@@ -44,6 +56,7 @@ let openCadEditorModels = new Map();
 let openCadMonacoPromise = null;
 let openCadMonacoMarkersOwner = 'openharness-opencad';
 let openCadEditorSaveTimer = null;
+let openCadAutoRender = false;
 let openCadRenderWorker = null;
 let openCadRenderWorkerBusy = false;
 let openCadRenderWorkerReject = null;
@@ -55,6 +68,13 @@ let openCadDiffModels = [];
 let openCadLibrarySymbolFiles = [];
 let openCadLibrarySymbolsLoading = false;
 let openCadLibrarySymbolsPromise = null;
+let openCadGuiRefreshTimer = null;
+let openCadSelectedGuiObjectId = '';
+let openCadGuiMouseTool = '';
+let openCadGuiTransformAxis = 'free';
+let openCadGuiInteractionBusy = false;
+let openCadGuiDebugLines = [];
+let openCadGuiDebugExpanded = false;
 const OPENSCAD_WASM_MODULE_PATHS = [
   '/static/vendor/openscad/openscad.js',
   '/static/openscad/openscad.js',
@@ -62,6 +82,7 @@ const OPENSCAD_WASM_MODULE_PATHS = [
 const OPENSCAD_FILES_STORAGE_KEY = 'openharness.opencad.files';
 const OPENSCAD_ACTIVE_FILE_STORAGE_KEY = 'openharness.opencad.active_file';
 const OPENSCAD_CHAT_AGENT_STORAGE_KEY = 'openharness.opencad.chat_agent';
+const OPENSCAD_AUTO_RENDER_STORAGE_KEY = 'openharness.opencad.auto_render';
 const OPENSCAD_DRAG_TRANSLATE_MARKER = '// OpenHarness transform: drag-offset';
 const OPENSCAD_WORKER_RENDER_TIMEOUT_MS = 90000;
 const OPENSCAD_SIGNATURES = {
@@ -75,6 +96,16 @@ const OPENSCAD_SIGNATURES = {
   linear_extrude: { label: 'linear_extrude(height, center = false, convexity, twist, slices, scale) child', parameters: ['height', 'center', 'convexity', 'twist', 'slices', 'scale'] },
   rotate_extrude: { label: 'rotate_extrude(angle = 360, convexity, $fn) child', parameters: ['angle', 'convexity', '$fn'] },
   gear: { label: 'gear(number_of_teeth, circular_pitch, diametral_pitch, pressure_angle, clearance, backlash, twist, involute_facets, flat, bore_diameter, gear_thickness, rim_thickness, hub_thickness, hub_diameter)', parameters: ['number_of_teeth', 'circular_pitch', 'diametral_pitch', 'pressure_angle', 'clearance', 'backlash', 'twist', 'involute_facets', 'flat', 'bore_diameter', 'gear_thickness', 'rim_thickness', 'hub_thickness', 'hub_diameter'] },
+};
+const OPENSCAD_GUI_PRIMITIVE_SNIPPETS = {
+  cube: 'translate([0, 0, 0])\\nrotate([0, 0, 0])\\ncube([20, 20, 20], center=true);',
+  cylinder: 'translate([0, 0, 0])\\nrotate([0, 0, 0])\\ncylinder(h=30, r=10, center=true);',
+  sphere: 'translate([0, 0, 0])\\nrotate([0, 0, 0])\\nsphere(r=12);',
+};
+const OPENSCAD_GUI_BOOLEAN_SNIPPETS = {
+  union: 'union() {\\n  cube([20, 20, 20], center=true);\\n  translate([12, 0, 0]) sphere(r=10);\\n}',
+  difference: 'difference() {\\n  cube([30, 30, 20], center=true);\\n  cylinder(h=40, r=8, center=true);\\n}',
+  intersection: 'intersection() {\\n  cube([28, 28, 28], center=true);\\n  sphere(r=18);\\n}',
 };
 const OPENSCAD_SAMPLE = `// OpenSCAD model generated in OpenHarness
 $fn = 48;
@@ -101,10 +132,15 @@ async function initOpenCad() {
   await initOpenCadEditor();
   setOpenCadEditorFile(getActiveOpenCadFile());
   installOpenCadEditorShortcuts();
+  loadOpenCadAutoRenderPreference();
+  renderOpenCadAutoRenderState();
+  renderOpenCadGuiPanel();
+  installOpenCadGuiDebugInterceptors();
   if (!openCadInitialized) {
     const viewport = document.getElementById('openCadViewport');
     openCadScene = new THREE.Scene();
     openCadScene.background = new THREE.Color(0x0b1020);
+    openCadInteractionScene = new THREE.Scene();
     openCadCamera = new THREE.PerspectiveCamera(45, 1, 0.1, 5000);
     openCadControls.target = new THREE.Vector3(0, 0, 0);
     openCadControls.raycaster = new THREE.Raycaster();
@@ -113,6 +149,7 @@ async function initOpenCad() {
     openCadControls.dragOffset = new THREE.Vector3();
     openCadRenderer = new THREE.WebGLRenderer({ antialias: true });
     openCadRenderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    openCadRenderer.autoClear = false;
     openCadRenderer.domElement.style.display = 'block';
     openCadRenderer.domElement.style.width = '100%';
     openCadRenderer.domElement.style.height = '100%';
@@ -125,6 +162,7 @@ async function initOpenCad() {
     const fill = new THREE.DirectionalLight(0x7dd3fc, 0.25);
     fill.position.set(-80, -50, 60);
     openCadScene.add(ambient, key, fill);
+    openCadInteractionScene.add(ambient.clone(), key.clone(), fill.clone());
     openCadScene.add(new THREE.GridHelper(160, 16, 0x335066, 0x1b2a3d));
     openCadScene.add(new THREE.AxesHelper(55));
 
@@ -136,6 +174,15 @@ async function initOpenCad() {
   resizeOpenCadViewport();
   renderOpenCad();
   animateOpenCad();
+}
+
+function installOpenCadGuiDebugInterceptors() {
+  const el = document.getElementById('openCadGuiDebugShell');
+  if (!el || el.dataset.openCadDebugInterceptors === '1') return;
+  el.dataset.openCadDebugInterceptors = '1';
+  const stop = event => event.stopPropagation();
+  ['pointerdown', 'pointermove', 'pointerup', 'mousedown', 'mousemove', 'mouseup', 'click', 'dblclick', 'wheel', 'contextmenu']
+    .forEach(type => el.addEventListener(type, stop));
 }
 
 async function loadOpenCadFiles() {
@@ -468,6 +515,7 @@ function setOpenCadEditorFile(file) {
   } else if (fallback) {
     fallback.value = file.code || '';
   }
+  renderOpenCadGuiPanel();
 }
 
 function getOpenCadEditorValue() {
@@ -1071,15 +1119,53 @@ function handleOpenCadCodeInput() {
   if (!file) return;
   file.code = getOpenCadEditorValue();
   renderOpenCadFileTabs();
+  scheduleOpenCadGuiRefresh();
   refreshOpenCadDiffIfOpen();
   scheduleOpenCadEditorSave();
   markOpenCadCodeDirty();
 }
 
+function scheduleOpenCadGuiRefresh() {
+  clearTimeout(openCadGuiRefreshTimer);
+  openCadGuiRefreshTimer = setTimeout(renderOpenCadGuiPanel, 180);
+}
+
+function loadOpenCadAutoRenderPreference() {
+  openCadAutoRender = localStorage.getItem(OPENSCAD_AUTO_RENDER_STORAGE_KEY) === '1';
+}
+
+function toggleOpenCadAutoRender(enabled) {
+  openCadAutoRender = Boolean(enabled);
+  localStorage.setItem(OPENSCAD_AUTO_RENDER_STORAGE_KEY, openCadAutoRender ? '1' : '0');
+  renderOpenCadAutoRenderState();
+  clearTimeout(openCadRenderTimer);
+  if (openCadAutoRender) {
+    setOpenCadStatus('自动渲染已开启，修改代码后会自动更新 3D 预览');
+    if (openCadHasUnrenderedChanges) {
+      openCadRenderTimer = setTimeout(() => renderOpenCad({ preserveCamera: true }), 250);
+    }
+  } else {
+    setOpenCadStatus(openCadHasUnrenderedChanges
+      ? '自动渲染已关闭，有未渲染修改，点击“渲染”更新 3D 预览'
+      : '自动渲染已关闭');
+  }
+}
+
+function renderOpenCadAutoRenderState() {
+  const toggle = document.getElementById('openCadAutoRenderToggle');
+  if (toggle) toggle.checked = Boolean(openCadAutoRender);
+}
+
 function markOpenCadCodeDirty() {
+  clearTimeout(openCadRenderTimer);
+  if (openCadAutoRender) {
+    openCadHasUnrenderedChanges = true;
+    setOpenCadStatus('自动渲染已开启，等待输入停止后更新 3D 预览...');
+    openCadRenderTimer = setTimeout(() => renderOpenCad({ preserveCamera: true }), 900);
+    return;
+  }
   if (openCadHasUnrenderedChanges) return;
   openCadHasUnrenderedChanges = true;
-  clearTimeout(openCadRenderTimer);
   setOpenCadStatus('有未渲染修改，点击“渲染”更新 3D 预览');
 }
 
@@ -1172,6 +1258,7 @@ function switchOpenCadFile(fileId) {
   setOpenCadEditorFile(next);
   saveOpenCadFiles();
   renderOpenCadFileTabs();
+  renderOpenCadGuiPanel();
   renderOpenCad();
 }
 
@@ -1188,6 +1275,483 @@ function addOpenCadFile() {
   const file = { id: makeOpenCadFileId(), name: finalName, code: '$fn = 48;\n\n', savedCode: '' };
   openCadFiles.push(file);
   switchOpenCadFile(file.id);
+}
+
+function renderOpenCadGuiPanel() {
+  const tree = document.getElementById('openCadGuiTree');
+  const modules = document.getElementById('openCadGuiModules');
+  const moduleSelect = document.getElementById('openCadGuiModuleSelect');
+  const objectSelect = document.getElementById('openCadGuiObjectSelect');
+  if (!tree && !modules && !moduleSelect && !objectSelect) return;
+  const code = getOpenCadEditorValue();
+  if (tree) tree.innerHTML = renderOpenCadGuiTreeHtml(code);
+  if (modules) modules.innerHTML = renderOpenCadGuiModulesHtml();
+  if (moduleSelect) renderOpenCadGuiModuleSelect(moduleSelect);
+  if (objectSelect) renderOpenCadGuiObjectSelect(objectSelect, code);
+  renderOpenCadGuiAxisState();
+  renderOpenCadGuiToolState();
+  if (!openCadLibrarySymbolFiles.length && !openCadLibrarySymbolsLoading) {
+    ensureOpenCadLibrarySymbolsLoaded().then(renderOpenCadGuiPanel).catch(error => {
+      console.warn('Failed to refresh OpenCAD GUI module index:', error);
+    });
+  }
+}
+
+function renderOpenCadGuiObjectSelect(container, code = getOpenCadEditorValue()) {
+  const objects = getOpenCadGuiObjects(code);
+  if (!objects.some(object => object.id === openCadSelectedGuiObjectId)) {
+    openCadSelectedGuiObjectId = objects[0]?.id || '';
+  }
+  const title = '<div class="open-cad-object-rail-title">对象</div>';
+  if (!objects.length) {
+    container.innerHTML = `${title}<span class="open-cad-gui-empty">暂无可选对象</span>`;
+    return;
+  }
+  container.innerHTML = title + objects.map(object => `
+    <label class="open-cad-gui-object-option ${object.id === openCadSelectedGuiObjectId ? 'active' : ''}" title="${openCadEscapeHtml(object.id)}">
+      <input type="radio" name="openCadGuiObject" value="${openCadEscapeHtml(object.id)}" ${object.id === openCadSelectedGuiObjectId ? 'checked' : ''} onchange="selectOpenCadGuiObject('${openCadEscapeHtml(object.id)}')">
+      <span>${openCadEscapeHtml(object.label)}</span>
+    </label>
+  `).join('');
+}
+
+function setOpenCadGuiTransformAxis(axis) {
+  openCadGuiTransformAxis = ['x', 'y', 'z'].includes(axis) ? axis : 'free';
+  renderOpenCadGuiAxisState();
+  setOpenCadStatus(`变换轴：${getOpenCadGuiAxisLabel()}`);
+}
+
+function renderOpenCadGuiAxisState() {
+  const entries = [
+    ['free', 'openCadAxisFree'],
+    ['x', 'openCadAxisX'],
+    ['y', 'openCadAxisY'],
+    ['z', 'openCadAxisZ'],
+  ];
+  for (const [axis, id] of entries) {
+    document.getElementById(id)?.classList.toggle('active', openCadGuiTransformAxis === axis);
+  }
+}
+
+function getOpenCadGuiAxisLabel() {
+  return openCadGuiTransformAxis === 'free' ? '自由' : openCadGuiTransformAxis.toUpperCase();
+}
+
+function renderOpenCadGuiToolState() {
+  const entries = [
+    ['translate', 'openCadToolTranslate'],
+    ['rotate', 'openCadToolRotate'],
+    ['scale', 'openCadToolScale'],
+  ];
+  for (const [tool, id] of entries) {
+    document.getElementById(id)?.classList.toggle('active', openCadGuiMouseTool === tool);
+  }
+}
+
+function clearOpenCadGuiMouseTool() {
+  openCadGuiMouseTool = '';
+  openCadGuiInteractionBusy = false;
+  renderOpenCadGuiToolState();
+}
+
+function debugOpenCadGui(message, details = null) {
+  const stamp = new Date().toLocaleTimeString();
+  let line = `[${stamp}] ${String(message || '')}`;
+  if (details !== null && details !== undefined) {
+    try {
+      line += ` ${typeof details === 'string' ? details : JSON.stringify(details)}`;
+    } catch (error) {
+      line += ` ${String(details)}`;
+    }
+  }
+  openCadGuiDebugLines.push(line);
+  openCadGuiDebugLines = openCadGuiDebugLines.slice(-8);
+  console.debug('[OpenCAD GUI]', message, details || '');
+  renderOpenCadGuiDebug();
+}
+
+function toggleOpenCadGuiDebug() {
+  openCadGuiDebugExpanded = !openCadGuiDebugExpanded;
+  renderOpenCadGuiDebug();
+}
+
+function renderOpenCadGuiDebug() {
+  const shell = document.getElementById('openCadGuiDebugShell');
+  const el = document.getElementById('openCadGuiDebug');
+  const toggle = document.getElementById('openCadGuiDebugToggle');
+  if (shell) shell.classList.toggle('hidden', !openCadGuiDebugLines.length);
+  if (toggle) {
+    toggle.classList.toggle('active', openCadGuiDebugExpanded);
+    toggle.textContent = openCadGuiDebugExpanded
+      ? 'Debug 收起'
+      : `Debug ${openCadGuiDebugLines.length || ''}`.trim();
+  }
+  if (!el) return;
+  el.classList.toggle('hidden', !openCadGuiDebugExpanded);
+  el.textContent = openCadGuiDebugLines.join('\n');
+}
+
+function selectOpenCadGuiObject(objectId) {
+  openCadSelectedGuiObjectId = String(objectId || '');
+  renderOpenCadGuiPanel();
+  debugOpenCadGui('select object', { objectId: openCadSelectedGuiObjectId });
+  setOpenCadStatus(openCadSelectedGuiObjectId ? `已选择对象 ${openCadSelectedGuiObjectId}` : '未选择对象');
+}
+
+function getOpenCadGuiObjects(code = getOpenCadEditorValue()) {
+  const objects = [];
+  const text = String(code || '');
+  const regex = /^\s*\/\/\s*@(cad|oh):id=([A-Za-z0-9_:-]+)([^\n]*)/gm;
+  let match;
+  while ((match = regex.exec(text))) {
+    const namespace = match[1];
+    const id = match[2];
+    const meta = match[3] || '';
+    const type = (meta.match(/\btype=([^\s]+)/) || [])[1] || 'object';
+    objects.push({
+      id,
+      namespace,
+      type,
+      label: `${type}:${id.replace(/^[A-Za-z]+_/, '').slice(0, 10)}`,
+      anchorStart: match.index,
+      bodyStart: regex.lastIndex,
+    });
+  }
+  return objects;
+}
+
+function renderOpenCadGuiTreeHtml(code) {
+  try {
+    const nodes = parseOpenScadForGui(code);
+    if (!nodes.length) return '<div class="open-cad-gui-empty">当前文件暂无可视化对象</div>';
+    return nodes.map(node => renderOpenCadGuiNodeHtml(node, 0)).join('');
+  } catch (error) {
+    return `<div class="open-cad-gui-empty">对象树解析失败：${openCadEscapeHtml(error.message || String(error))}</div>`;
+  }
+}
+
+function parseOpenScadForGui(code) {
+  const guiCode = stripOpenCadTopLevelDefinitions(stripOpenCadReferences(code || ''));
+  return parseOpenScad(guiCode);
+}
+
+function stripOpenCadReferences(code) {
+  return String(code || '').replace(/^\s*(?:use|include)\s*[<"][^>"]+[>"]\s*;?\s*$/gm, '');
+}
+
+function stripOpenCadTopLevelDefinitions(code) {
+  const lines = String(code || '').split('\n');
+  const kept = [];
+  let skipping = false;
+  let depth = 0;
+  for (const line of lines) {
+    if (!skipping && /^\s*(?:module|function)\s+[A-Za-z_]\w*\s*\(/.test(line)) {
+      skipping = true;
+      depth = updateOpenCadBraceDepth(0, line);
+      if (depth === 0 && /;\s*$/.test(line)) skipping = false;
+      continue;
+    }
+    if (skipping) {
+      depth = updateOpenCadBraceDepth(depth, line);
+      if (depth === 0) skipping = false;
+      continue;
+    }
+    kept.push(line);
+  }
+  return kept.join('\n');
+}
+
+function renderOpenCadGuiNodeHtml(node, depth = 0) {
+  const name = String(node?.name || 'node');
+  const args = summarizeOpenCadGuiArgs(node);
+  const pad = Math.min(depth, 6) * 12;
+  const children = (node.children || []).map(child => renderOpenCadGuiNodeHtml(child, depth + 1)).join('');
+  return `
+    <div class="open-cad-gui-node" style="margin-left:${pad}px" title="${openCadEscapeHtml(args)}">
+      <span class="text-text-primary">${openCadEscapeHtml(name)}</span>${args ? ` <span>${openCadEscapeHtml(args)}</span>` : ''}
+    </div>
+    ${children}
+  `;
+}
+
+function summarizeOpenCadGuiArgs(node) {
+  const args = (node?.args || []).slice(0, 3).map(arg => {
+    const value = formatOpenCadGuiValue(arg.value);
+    return arg.name ? `${arg.name}=${value}` : value;
+  });
+  const suffix = (node?.args || []).length > 3 ? ', ...' : '';
+  return args.length ? `(${args.join(', ')}${suffix})` : '';
+}
+
+function formatOpenCadGuiValue(value) {
+  if (Array.isArray(value)) return `[${value.map(formatOpenCadGuiValue).join(', ')}]`;
+  if (typeof value === 'string') return value.length > 18 ? `${value.slice(0, 18)}...` : value;
+  return String(value);
+}
+
+function renderOpenCadGuiModulesHtml() {
+  const modules = getOpenCadGuiModules().slice(0, 24);
+  if (!modules.length) return '<div class="open-cad-gui-empty">未发现 workspace module</div>';
+  return modules.map(symbol => `
+    <div class="open-cad-gui-module" title="${openCadEscapeHtml(symbol.label)}">
+      <div class="text-text-primary">${openCadEscapeHtml(symbol.name)}</div>
+      <div>${openCadEscapeHtml(symbol.source || 'workspace')}</div>
+    </div>
+  `).join('');
+}
+
+function renderOpenCadGuiModuleSelect(select) {
+  const modules = getOpenCadGuiModules();
+  const previous = select.value;
+  select.innerHTML = modules.length
+    ? modules.map((symbol, index) => `<option value="${index}">${openCadEscapeHtml(symbol.name)} · ${openCadEscapeHtml(symbol.source || 'workspace')}</option>`).join('')
+    : '<option value="">暂无 module</option>';
+  if (previous && [...select.options].some(option => option.value === previous)) select.value = previous;
+}
+
+function getOpenCadGuiModules() {
+  const index = getOpenCadSymbolIndex();
+  const active = getActiveOpenCadFile();
+  const referenced = getOpenCadReferencedModuleSources(getOpenCadEditorValue());
+  return index.callables
+    .filter(symbol => symbol.kind === 'module')
+    .filter(symbol => {
+      if (symbol.source === active?.name) return true;
+      if (symbol.sourceKind === 'workspace') return true;
+      return referenced.has(symbol.source);
+    });
+}
+
+function getOpenCadReferencedModuleSources(code) {
+  const sources = new Set();
+  const regex = /^\s*(?:use|include)\s*[<"]([^>"]+)[>"]\s*;?\s*$/gm;
+  let match;
+  while ((match = regex.exec(String(code || '')))) {
+    const source = sanitizeOpenCadLibraryPath(match[1]);
+    if (source) sources.add(source);
+  }
+  return sources;
+}
+
+function insertOpenCadGuiPrimitive(kind) {
+  const body = buildOpenCadGuiPrimitiveSnippet(kind);
+  if (!body) return;
+  const nodeId = makeOpenCadGuiNodeId(kind);
+  openCadSelectedGuiObjectId = nodeId;
+  insertOpenCadSnippetAtCursor(`\n// @cad:id=${nodeId} type=${kind}\n${body}\n`);
+}
+
+function insertOpenCadGuiBoolean(kind) {
+  const body = OPENSCAD_GUI_BOOLEAN_SNIPPETS[kind];
+  if (!body) return;
+  const nodeId = makeOpenCadGuiNodeId(kind);
+  openCadSelectedGuiObjectId = nodeId;
+  insertOpenCadSnippetAtCursor(`\n// @cad:id=${nodeId} type=${kind}\n${body.replace(/\\n/g, '\n')}\n`);
+}
+
+function insertOpenCadGuiTransform(kind) {
+  const defaults = kind === 'scale' ? [1, 1, 1] : [0, 0, 0];
+  debugOpenCadGui('transform button', {
+    kind,
+    selected: openCadSelectedGuiObjectId || '(none)',
+    axis: openCadGuiTransformAxis,
+  });
+  if (['translate', 'rotate', 'scale'].includes(kind) && openCadSelectedGuiObjectId) {
+    openCadGuiMouseTool = kind;
+    renderOpenCadGuiToolState();
+    const label = kind === 'translate' ? '平移' : kind === 'rotate' ? '旋转' : '缩放';
+    showOpenCadGuiInteractionObject(openCadSelectedGuiObjectId, label);
+    return;
+  }
+  const value = promptOpenCadGuiVector(`${kind} 参数`, defaults);
+  if (!value) return;
+  if (openCadSelectedGuiObjectId && applyOpenCadGuiTransformToSelected(kind, value)) return;
+  const child = kind === 'scale' ? 'cube([20, 20, 20], center=true);' : '// child\ncube([20, 20, 20], center=true);';
+  const nodeId = makeOpenCadGuiNodeId(kind);
+  openCadSelectedGuiObjectId = nodeId;
+  insertOpenCadSnippetAtCursor(`\n// @cad:id=${nodeId} type=${kind}\n${kind}(${value}) {\n  ${child.replace(/\n/g, '\n  ')}\n}\n`);
+}
+
+function insertSelectedOpenCadGuiModule() {
+  const select = document.getElementById('openCadGuiModuleSelect');
+  const modules = getOpenCadGuiModules();
+  const symbol = modules[Number(select?.value)];
+  if (!symbol) {
+    alert('暂无可插入的 module');
+    return;
+  }
+  const args = [];
+  for (const param of symbol.parameters || []) {
+    const defaultValue = getOpenCadGuiParamDefault(param.label);
+    const value = prompt(`参数 ${symbol.name}.${param.name}`, defaultValue);
+    if (value === null) return;
+    if (String(value).trim()) args.push(`${param.name}=${String(value).trim()}`);
+  }
+  ensureOpenCadGuiUseStatement(symbol);
+  const nodeId = makeOpenCadGuiNodeId(symbol.name);
+  openCadSelectedGuiObjectId = nodeId;
+  insertOpenCadSnippetAtCursor(`\n// @cad:id=${nodeId} type=module source=${symbol.source || 'current'}\ntranslate([0, 0, 0])\nrotate([0, 0, 0])\nscale([1, 1, 1])\n${symbol.name}(${args.join(', ')});\n`);
+}
+
+function applyOpenCadGuiTransformToSelected(kind, value, options = {}) {
+  const file = getActiveOpenCadFile();
+  const code = syncOpenCadEditorToActiveFile();
+  const range = findOpenCadGuiObjectRange(code, openCadSelectedGuiObjectId);
+  if (!file || !range) return false;
+  const block = code.slice(range.start, range.end);
+  const nextBlock = upsertOpenCadGuiTransform(block, kind, value);
+  setOpenCadEditorValue(code.slice(0, range.start) + nextBlock + code.slice(range.end), file);
+  handleOpenCadCodeInput();
+  renderOpenCad({ preserveCamera: Boolean(options.preserveCamera) });
+  setOpenCadStatus(`对象 ${openCadSelectedGuiObjectId} 已更新 ${kind}()`);
+  return true;
+}
+
+function getOpenCadSelectedTransformValue(kind, delta) {
+  const code = syncOpenCadEditorToActiveFile();
+  const range = findOpenCadGuiObjectRange(code, openCadSelectedGuiObjectId);
+  if (!range) return '';
+  const block = code.slice(range.start, range.end);
+  const current = readOpenCadGuiTransformVector(block, kind, kind === 'scale' ? [1, 1, 1] : [0, 0, 0]);
+  if (kind === 'translate') {
+    return `[${[
+      current[0] + delta.x,
+      current[1] + delta.y,
+      current[2] + delta.z,
+    ].map(formatOpenCadNumber).join(', ')}]`;
+  }
+  if (kind === 'rotate' && Array.isArray(delta)) {
+    return `[${[
+      current[0] + delta[0],
+      current[1] + delta[1],
+      current[2] + delta[2],
+    ].map(formatOpenCadNumber).join(', ')}]`;
+  }
+  if (kind === 'scale' && Array.isArray(delta)) {
+    return `[${[
+      current[0] * delta[0],
+      current[1] * delta[1],
+      current[2] * delta[2],
+    ].map(formatOpenCadNumber).join(', ')}]`;
+  }
+  return `[${current.map(formatOpenCadNumber).join(', ')}]`;
+}
+
+function readOpenCadGuiTransformVector(block, kind, fallback) {
+  const escaped = escapeOpenCadRegex(kind);
+  const match = String(block || '').match(new RegExp(`^\\s*${escaped}\\s*\\(\\s*\\[([^\\]]+)\\]`, 'm'));
+  if (!match) return fallback;
+  const values = match[1].split(',').map(value => Number(value.trim()));
+  if (values.length < 3 || values.some(value => !Number.isFinite(value))) return fallback;
+  return [values[0], values[1], values[2]];
+}
+
+function findOpenCadGuiObjectRange(code, objectId) {
+  const text = String(code || '');
+  const escaped = escapeOpenCadRegex(objectId);
+  const anchorRegex = new RegExp(`^\\s*//\\s*@(cad|oh):id=${escaped}[^\\n]*`, 'm');
+  const match = anchorRegex.exec(text);
+  if (!match) return null;
+  const nextAnchor = /^\s*\/\/\s*@(cad|oh):id=/gm;
+  nextAnchor.lastIndex = match.index + match[0].length;
+  const next = nextAnchor.exec(text);
+  return { start: match.index, end: next ? next.index : text.length };
+}
+
+function upsertOpenCadGuiTransform(block, kind, value) {
+  const lines = String(block || '').replace(/\s+$/g, '').split('\n');
+  const transformRegex = new RegExp(`^(\\s*)${escapeOpenCadRegex(kind)}\\s*\\([^\\n]*\\)\\s*(?:;)?\\s*$`);
+  const replacement = `${kind}(${value})`;
+  for (let index = 1; index < lines.length; index += 1) {
+    if (transformRegex.test(lines[index])) {
+      lines[index] = lines[index].replace(transformRegex, `$1${replacement}`);
+      return lines.join('\n') + '\n';
+    }
+  }
+  const insertAt = Math.min(1, lines.length);
+  lines.splice(insertAt, 0, replacement);
+  return lines.join('\n') + '\n';
+}
+
+function buildOpenCadGuiPrimitiveSnippet(kind) {
+  if (kind === 'cube') {
+    const size = promptOpenCadGuiVector('立方体尺寸 [x, y, z]', [20, 20, 20]);
+    if (!size) return '';
+    return `translate([0, 0, 0])\nrotate([0, 0, 0])\ncube(${size}, center=true);`;
+  }
+  if (kind === 'cylinder') {
+    const height = prompt('圆柱体高度 h', '30');
+    if (height === null) return '';
+    const radius = prompt('圆柱体半径 r', '10');
+    if (radius === null) return '';
+    return `translate([0, 0, 0])\nrotate([0, 0, 0])\ncylinder(h=${height || 30}, r=${radius || 10}, center=true);`;
+  }
+  if (kind === 'sphere') {
+    const radius = prompt('球体半径 r', '12');
+    if (radius === null) return '';
+    return `translate([0, 0, 0])\nrotate([0, 0, 0])\nsphere(r=${radius || 12});`;
+  }
+  return (OPENSCAD_GUI_PRIMITIVE_SNIPPETS[kind] || '').replace(/\\n/g, '\n');
+}
+
+function promptOpenCadGuiVector(title, defaults) {
+  const value = prompt(title, `[${defaults.join(', ')}]`);
+  if (value === null) return '';
+  const trimmed = String(value).trim();
+  if (!trimmed) return `[${defaults.join(', ')}]`;
+  return trimmed.startsWith('[') ? trimmed : `[${trimmed}]`;
+}
+
+function getOpenCadGuiParamDefault(label) {
+  const equalsIndex = findOpenCadTopLevelChar(label || '', '=');
+  if (equalsIndex < 0) return '';
+  return String(label).slice(equalsIndex + 1).trim();
+}
+
+function ensureOpenCadGuiUseStatement(symbol) {
+  const active = getActiveOpenCadFile();
+  const source = sanitizeOpenCadLibraryPath(symbol?.source || '');
+  if (!active || !source || source === active.name) return;
+  const current = getOpenCadEditorValue();
+  const escaped = escapeOpenCadRegex(source);
+  const hasReference = new RegExp(`^\\s*(?:use|include)\\s*[<"]${escaped}[>"]`, 'm').test(current);
+  if (hasReference) return;
+  setOpenCadEditorValue(`use <${source}>;\n${current}`, active);
+  handleOpenCadCodeInput();
+}
+
+function makeOpenCadGuiNodeId(prefix = 'node') {
+  return `${String(prefix || 'node').replace(/[^A-Za-z0-9_]/g, '_')}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
+}
+
+function insertOpenCadSnippetAtCursor(text) {
+  const snippet = String(text || '');
+  const file = getActiveOpenCadFile();
+  if (!file) return;
+  if (openCadEditor) {
+    const selection = openCadEditor.getSelection();
+    openCadEditor.executeEdits('opencad-gui', [{ range: selection, text: snippet, forceMoveMarkers: true }]);
+    openCadEditor.focus();
+    finishOpenCadGuiInsertion();
+    return;
+  }
+  const fallback = document.getElementById('openCadCode');
+  if (!fallback) return;
+  const start = fallback.selectionStart ?? fallback.value.length;
+  const end = fallback.selectionEnd ?? start;
+  fallback.value = fallback.value.slice(0, start) + snippet + fallback.value.slice(end);
+  fallback.selectionStart = fallback.selectionEnd = start + snippet.length;
+  handleOpenCadCodeInput();
+  finishOpenCadGuiInsertion();
+}
+
+function finishOpenCadGuiInsertion() {
+  setTimeout(() => {
+    syncOpenCadEditorToActiveFile();
+    renderOpenCadGuiPanel();
+    saveOpenCadFiles();
+    renderOpenCad({ preserveCamera: true });
+  }, 0);
 }
 
 function renameOpenCadFile() {
@@ -1231,6 +1795,16 @@ function installOpenCadControls(viewport) {
   viewport.addEventListener('pointerdown', (event) => {
     openCadControls.lastX = event.clientX;
     openCadControls.lastY = event.clientY;
+    if (openCadGuiMouseTool && openCadSelectedGuiObjectId) {
+      if (openCadGuiInteractionBusy || !openCadInteractionRoot) {
+        setOpenCadStatus(openCadGuiInteractionBusy ? '交互预览生成中，请稍等...' : '交互预览尚未就绪，请重新点击变换工具');
+        return;
+      }
+      if (startOpenCadGuiTransformDrag(event)) {
+        viewport.setPointerCapture(event.pointerId);
+        return;
+      }
+    }
     const hit = getOpenCadModelHit(event);
     if (hit && openCadModelRoot) {
       const dragObject = findOpenCadDraggableObject(hit.object);
@@ -1257,12 +1831,20 @@ function installOpenCadControls(viewport) {
   viewport.addEventListener('pointerup', (event) => {
     if (openCadControls.mode === 'move-model') {
       commitOpenCadModelDrag();
+    } else if (openCadControls.mode.startsWith('gui-')) {
+      commitOpenCadGuiTransformDrag();
     }
     openCadControls.mode = '';
     openCadControls.dragStartRootPosition = null;
     openCadControls.dragObject = null;
     openCadControls.dragStartObjectPosition = null;
     openCadControls.dragSourceIndex = null;
+    openCadControls.guiDragStartPoint = null;
+    openCadControls.guiDragCurrentPoint = null;
+    openCadControls.guiDragObject = null;
+    openCadControls.guiDragObjectStartPosition = null;
+    openCadControls.guiDragObjectStartRotation = null;
+    openCadControls.guiDragObjectStartScale = null;
     if (viewport.hasPointerCapture(event.pointerId)) {
       viewport.releasePointerCapture(event.pointerId);
     }
@@ -1273,6 +1855,14 @@ function installOpenCadControls(viewport) {
     openCadControls.dragObject = null;
     openCadControls.dragStartObjectPosition = null;
     openCadControls.dragSourceIndex = null;
+    openCadControls.guiDragStartPoint = null;
+    openCadControls.guiDragCurrentPoint = null;
+    openCadControls.guiDragObject = null;
+    openCadControls.guiDragObjectStartPosition = null;
+    openCadControls.guiDragObjectStartRotation = null;
+    openCadControls.guiDragObjectStartScale = null;
+    clearOpenCadGuiMouseTool();
+    clearOpenCadInteractionLayer();
   });
   viewport.addEventListener('pointermove', (event) => {
     if (!openCadControls.mode) return;
@@ -1282,6 +1872,8 @@ function installOpenCadControls(viewport) {
     openCadControls.lastY = event.clientY;
     if (openCadControls.mode === 'move-model') {
       moveOpenCadModelToPointer(event);
+    } else if (openCadControls.mode.startsWith('gui-')) {
+      moveOpenCadGuiTransformToPointer(event);
     } else {
       openCadControls.theta -= dx * 0.008;
       openCadControls.phi = Math.max(0.15, Math.min(Math.PI - 0.15, openCadControls.phi + dy * 0.008));
@@ -1329,12 +1921,354 @@ function moveOpenCadModelToPointer(event) {
   }
 }
 
+function startOpenCadGuiTransformDrag(event) {
+  const object = findOpenCadGuiObject3d(openCadSelectedGuiObjectId);
+  if (!object) {
+    setOpenCadStatus('选中对象暂不支持鼠标操作', true);
+    return false;
+  }
+  openCadControls.mode = `gui-${openCadGuiMouseTool}`;
+  openCadControls.guiDragObject = object;
+  openCadControls.guiDragObjectStartPosition = object?.position?.clone() || null;
+  openCadControls.guiDragObjectStartRotation = object?.rotation?.clone() || null;
+  openCadControls.guiDragObjectStartScale = object?.scale?.clone() || null;
+  openCadControls.guiDragStartX = event.clientX;
+  openCadControls.guiDragStartY = event.clientY;
+  openCadControls.guiDragDeltaX = 0;
+  openCadControls.guiDragDeltaY = 0;
+  if (openCadGuiMouseTool === 'translate' && openCadGuiTransformAxis === 'free') {
+    const point = getOpenCadPointerPlanePoint(event, getOpenCadGuiDragPlanePoint(event));
+    if (!point) return false;
+    openCadControls.guiDragStartPoint = point.clone();
+    openCadControls.guiDragCurrentPoint = point.clone();
+  }
+  const label = openCadGuiMouseTool === 'translate' ? '平移' : openCadGuiMouseTool === 'rotate' ? '旋转' : '缩放';
+  setOpenCadStatus(`拖动以${label}对象 ${openCadSelectedGuiObjectId} · ${getOpenCadGuiAxisLabel()}轴`);
+  return true;
+}
+
+function moveOpenCadGuiTransformToPointer(event) {
+  openCadControls.guiDragDeltaX = event.clientX - openCadControls.guiDragStartX;
+  openCadControls.guiDragDeltaY = event.clientY - openCadControls.guiDragStartY;
+  if (openCadControls.mode === 'gui-translate') {
+    const delta = getOpenCadMouseTranslateDelta(event);
+    if (openCadControls.guiDragObject && openCadControls.guiDragObjectStartPosition) {
+      openCadControls.guiDragObject.position.copy(openCadControls.guiDragObjectStartPosition.clone().add(delta));
+    }
+    setOpenCadStatus(`平移预览：translate += [${[delta.x, delta.y, delta.z].map(formatOpenCadNumber).join(', ')}]`);
+    return;
+  }
+  if (openCadControls.mode === 'gui-rotate') {
+    const delta = getOpenCadMouseRotateDelta();
+    if (openCadControls.guiDragObject && openCadControls.guiDragObjectStartRotation) {
+      openCadControls.guiDragObject.rotation.set(
+        openCadControls.guiDragObjectStartRotation.x + delta[0] * Math.PI / 180,
+        openCadControls.guiDragObjectStartRotation.y + delta[1] * Math.PI / 180,
+        openCadControls.guiDragObjectStartRotation.z + delta[2] * Math.PI / 180
+      );
+    }
+    setOpenCadStatus(`旋转预览：rotate += [${delta.map(formatOpenCadNumber).join(', ')}]`);
+    return;
+  }
+  if (openCadControls.mode === 'gui-scale') {
+    const scale = getOpenCadMouseScaleVector();
+    if (openCadControls.guiDragObject && openCadControls.guiDragObjectStartScale) {
+      openCadControls.guiDragObject.scale.set(
+        openCadControls.guiDragObjectStartScale.x * scale[0],
+        openCadControls.guiDragObjectStartScale.y * scale[1],
+        openCadControls.guiDragObjectStartScale.z * scale[2]
+      );
+    }
+    setOpenCadStatus(`缩放预览：scale × [${scale.map(formatOpenCadNumber).join(', ')}]`);
+  }
+}
+
+function commitOpenCadGuiTransformDrag() {
+  if (!openCadSelectedGuiObjectId) return;
+  const kind = openCadControls.mode.replace(/^gui-/, '');
+  let nextValue = '';
+  if (kind === 'translate') {
+    const delta = getOpenCadMouseTranslateDelta();
+    if (delta.length() < 0.001) {
+      setOpenCadStatus(`已选择对象 ${openCadSelectedGuiObjectId}`);
+      clearOpenCadInteractionLayer();
+      clearOpenCadGuiMouseTool();
+      return;
+    }
+    nextValue = getOpenCadSelectedTransformValue('translate', delta);
+  } else if (kind === 'rotate') {
+    const delta = getOpenCadMouseRotateDelta();
+    if (Math.abs(delta[0]) + Math.abs(delta[1]) + Math.abs(delta[2]) < 0.1) {
+      setOpenCadStatus(`已选择对象 ${openCadSelectedGuiObjectId}`);
+      clearOpenCadInteractionLayer();
+      clearOpenCadGuiMouseTool();
+      return;
+    }
+    nextValue = getOpenCadSelectedTransformValue('rotate', delta);
+  } else if (kind === 'scale') {
+    const scale = getOpenCadMouseScaleVector();
+    if (Math.abs(scale[0] - 1) + Math.abs(scale[1] - 1) + Math.abs(scale[2] - 1) < 0.002) {
+      setOpenCadStatus(`已选择对象 ${openCadSelectedGuiObjectId}`);
+      clearOpenCadInteractionLayer();
+      clearOpenCadGuiMouseTool();
+      return;
+    }
+    nextValue = getOpenCadSelectedTransformValue('scale', scale);
+  }
+  if (!nextValue || !applyOpenCadGuiTransformToSelected(kind, nextValue, { preserveCamera: true })) {
+    setOpenCadStatus(`${kind} 失败：未找到可编辑的选中对象`, true);
+    return;
+  }
+  clearOpenCadInteractionLayer();
+  clearOpenCadGuiMouseTool();
+}
+
+function getOpenCadMouseRotateDelta() {
+  const amount = openCadControls.guiDragDeltaX * 0.8;
+  if (openCadGuiTransformAxis === 'x') return [amount, 0, 0];
+  if (openCadGuiTransformAxis === 'y') return [0, amount, 0];
+  if (openCadGuiTransformAxis === 'z') return [0, 0, amount];
+  return [
+    openCadControls.guiDragDeltaY * 0.8,
+    0,
+    openCadControls.guiDragDeltaX * 0.8,
+  ];
+}
+
+function getOpenCadMouseTranslateDelta(event = null) {
+  if (openCadGuiTransformAxis !== 'free') {
+    return openCadAxisVector(openCadControls.guiDragDeltaX * 0.12);
+  }
+  if (event) {
+    const point = getOpenCadPointerPlanePoint(event, openCadControls.guiDragStartPoint || getOpenCadGuiDragPlanePoint(event));
+    if (point && openCadControls.guiDragStartPoint) {
+      openCadControls.guiDragCurrentPoint = point.clone();
+    }
+  }
+  if (!openCadControls.guiDragStartPoint || !openCadControls.guiDragCurrentPoint) return new THREE.Vector3(0, 0, 0);
+  return openCadControls.guiDragCurrentPoint.clone().sub(openCadControls.guiDragStartPoint);
+}
+
+function getOpenCadMouseScaleFactor() {
+  return Math.max(0.05, Math.min(20, Math.exp((-openCadControls.guiDragDeltaY + openCadControls.guiDragDeltaX * 0.35) * 0.01)));
+}
+
+function getOpenCadMouseScaleVector() {
+  const factor = getOpenCadMouseScaleFactor();
+  if (openCadGuiTransformAxis === 'x') return [factor, 1, 1];
+  if (openCadGuiTransformAxis === 'y') return [1, factor, 1];
+  if (openCadGuiTransformAxis === 'z') return [1, 1, factor];
+  return [factor, factor, factor];
+}
+
+function openCadAxisVector(amount) {
+  if (openCadGuiTransformAxis === 'x') return new THREE.Vector3(amount, 0, 0);
+  if (openCadGuiTransformAxis === 'y') return new THREE.Vector3(0, amount, 0);
+  if (openCadGuiTransformAxis === 'z') return new THREE.Vector3(0, 0, amount);
+  return new THREE.Vector3(0, 0, 0);
+}
+
+function findOpenCadGuiObject3d(objectId) {
+  const root = openCadInteractionRoot || openCadModelRoot;
+  if (!root || !objectId) return null;
+  let found = null;
+  root.traverse(object => {
+    if (!found && object.userData?.openCadGuiObjectId === objectId && object.parent === root) {
+      found = object;
+    }
+  });
+  if (found) return found;
+  root.traverse(object => {
+    if (!found && object.userData?.openCadGuiObjectId === objectId) found = object;
+  });
+  return found;
+}
+
+function showOpenCadGuiInteractionObject(objectId, label = '') {
+  clearOpenCadInteractionLayer();
+  const block = getOpenCadGuiObjectBlock(getOpenCadEditorValue(), objectId);
+  debugOpenCadGui('interaction start', {
+    objectId,
+    tool: openCadGuiMouseTool || '(none)',
+    blockChars: block.length,
+    label,
+  });
+  if (!block) {
+    debugOpenCadGui('interaction abort: block not found', { objectId });
+    setOpenCadStatus('未找到可拖动的选中对象', true);
+    return;
+  }
+  try {
+    const ast = parseOpenScad(getOpenCadPreviewRenderableCode(block));
+    debugOpenCadGui('frontend parse ok', { nodes: ast.length });
+    openCadInteractionRoot = new THREE.Group();
+    const warnings = [];
+    ast.forEach(node => {
+      const obj = buildOpenScadObject(node, null, warnings);
+      if (!obj) return;
+      tagOpenCadGuiObject(obj, objectId);
+      makeOpenCadObjectPreviewMaterial(obj);
+      openCadInteractionRoot.add(obj);
+    });
+    debugOpenCadGui('frontend objects built', {
+      children: openCadInteractionRoot.children.length,
+      warnings: warnings.length,
+      hasMesh: hasOpenCadMesh(openCadInteractionRoot),
+      warningText: warnings.slice(0, 3).join(' | '),
+    });
+    if (!openCadInteractionRoot.children.length || !hasOpenCadMesh(openCadInteractionRoot)) {
+      clearOpenCadInteractionLayer();
+      debugOpenCadGui('fallback to WASM preview', {
+        reason: openCadInteractionRoot.children.length ? 'frontend object has no mesh' : 'no frontend objects',
+        warnings: warnings.slice(0, 3),
+      });
+      renderOpenCadGuiInteractionObjectWithWasm(objectId, block, label);
+      return;
+    }
+    openCadInteractionScene.add(openCadInteractionRoot);
+    openCadGuiInteractionBusy = false;
+    setOpenCadStatus(`已进入鼠标${label || '变换'}模式 · ${getOpenCadGuiAxisLabel()}轴：拖动预览区以调整 ${objectId}`);
+  } catch (error) {
+    clearOpenCadInteractionLayer();
+    debugOpenCadGui('fallback to WASM preview', { reason: formatOpenCadError(error) });
+    renderOpenCadGuiInteractionObjectWithWasm(objectId, block, label);
+  }
+}
+
+async function renderOpenCadGuiInteractionObjectWithWasm(objectId, block, label = '') {
+  try {
+    openCadGuiInteractionBusy = true;
+    setOpenCadStatus(`正在生成 ${objectId} 的交互预览，请稍等...`);
+    const code = buildOpenCadGuiInteractionRenderCode(block);
+    debugOpenCadGui('WASM preview start', {
+      objectId,
+      codeChars: code.length,
+      head: code.split('\n').slice(0, 5).join(' | '),
+    });
+    const result = await renderOpenCadWithWasm(code, {
+      interactionPreview: true,
+      dedicatedWorker: true,
+      activeFileName: '__openharness_interaction_preview.scad',
+    });
+    debugOpenCadGui('WASM preview result', {
+      objectId,
+      offBytes: result?.off?.byteLength || 0,
+      stlBytes: result?.stl?.byteLength || 0,
+    });
+    if (objectId !== openCadSelectedGuiObjectId || !openCadGuiMouseTool) return;
+    const object = result?.off?.byteLength
+      ? buildOpenCadOffObject(result.off)
+      : buildOpenCadStlObject(result?.stl || result);
+    if (!object) throw new Error('OpenSCAD WASM 返回了空交互预览');
+    tagOpenCadGuiObject(object, objectId);
+    makeOpenCadObjectPreviewMaterial(object);
+    clearOpenCadInteractionLayer();
+    openCadInteractionRoot = new THREE.Group();
+    openCadInteractionRoot.add(object);
+    openCadInteractionScene.add(openCadInteractionRoot);
+    openCadGuiInteractionBusy = false;
+    setOpenCadStatus(`交互预览已生成。已进入鼠标${label || (openCadGuiMouseTool === 'translate' ? '平移' : openCadGuiMouseTool === 'rotate' ? '旋转' : '缩放')}模式 · ${getOpenCadGuiAxisLabel()}轴：现在可以拖动`);
+  } catch (error) {
+    openCadGuiInteractionBusy = false;
+    clearOpenCadInteractionLayer();
+    debugOpenCadGui('WASM preview failed', formatOpenCadError(error));
+    setOpenCadStatus(`选中对象交互预览失败：${formatOpenCadError(error)}`, true);
+  }
+}
+
+function buildOpenCadGuiInteractionRenderCode(block) {
+  const source = (String(block || '').match(/\bsource=([^\s]+)/) || [])[1] || '';
+  const refs = [];
+  const activeFile = getActiveOpenCadFile();
+  if (source === 'current' && activeFile?.name) {
+    refs.push(`use <${sanitizeOpenCadFileName(activeFile.name)}>;`);
+  } else if (source) {
+    refs.push(`use <${source}>;`);
+  }
+  const currentCode = getOpenCadEditorValue();
+  const existingRefs = currentCode.match(/^\s*(?:use|include)\s*[<"][^>"]+[>"]\s*;?\s*$/gm) || [];
+  refs.push(...existingRefs);
+  return `${[...new Set(refs)].join('\n')}\n\n${block}`;
+}
+
+function clearOpenCadInteractionLayer() {
+  if (openCadInteractionRoot && openCadInteractionScene) openCadInteractionScene.remove(openCadInteractionRoot);
+  openCadInteractionRoot = null;
+  openCadGuiInteractionBusy = false;
+  openCadControls.guiDragObject = null;
+  openCadControls.guiDragObjectStartPosition = null;
+}
+
+function getOpenCadGuiObjectBlock(code, objectId) {
+  const range = findOpenCadGuiObjectRange(String(code || ''), objectId);
+  return range ? String(code || '').slice(range.start, range.end) : '';
+}
+
+function hasOpenCadMesh(object) {
+  let found = false;
+  object?.traverse?.(child => {
+    if (child.isMesh) found = true;
+  });
+  return found;
+}
+
+function makeOpenCadObjectPreviewMaterial(object) {
+  object.traverse(child => {
+    if (!child.isMesh || !child.material) return;
+    const source = Array.isArray(child.material) ? child.material : [child.material];
+    const previewMaterials = source.map(material => {
+      const next = material.clone();
+      next.color = new THREE.Color(0x34d399);
+      next.opacity = 0.48;
+      next.transparent = true;
+      next.depthTest = false;
+      next.depthWrite = false;
+      next.side = THREE.DoubleSide;
+      next.metalness = 0.02;
+      next.roughness = 0.45;
+      return next;
+    });
+    child.material = Array.isArray(child.material) ? previewMaterials : previewMaterials[0];
+    child.renderOrder = 1000;
+  });
+}
+
+
+function getOpenCadPointerPlanePoint(event, planePoint) {
+  if (!openCadCamera || !openCadControls.raycaster || !openCadControls.pointer || !planePoint) return null;
+  const rect = openCadRenderer.domElement.getBoundingClientRect();
+  openCadControls.pointer.x = ((event.clientX - rect.left) / Math.max(1, rect.width)) * 2 - 1;
+  openCadControls.pointer.y = -(((event.clientY - rect.top) / Math.max(1, rect.height)) * 2 - 1);
+  openCadControls.raycaster.setFromCamera(openCadControls.pointer, openCadCamera);
+  const normal = openCadCamera.position.clone().sub(planePoint).normalize();
+  openCadControls.dragPlane.setFromNormalAndCoplanarPoint(normal, planePoint);
+  const point = new THREE.Vector3();
+  return openCadControls.raycaster.ray.intersectPlane(openCadControls.dragPlane, point) ? point : null;
+}
+
+function getOpenCadGuiDragPlanePoint(event) {
+  const hit = getOpenCadModelHit(event);
+  if (hit?.point) return hit.point.clone();
+  if (openCadControls.target) return openCadControls.target.clone();
+  return new THREE.Vector3(0, 0, 0);
+}
+
 function commitOpenCadModelDrag() {
   const target = openCadControls.dragObject || openCadModelRoot;
   const start = openCadControls.dragStartObjectPosition || openCadControls.dragStartRootPosition;
   if (!target || !start) return;
   const delta = target.position.clone().sub(start);
   if (delta.length() < 0.001) return;
+  if (Number.isInteger(openCadControls.dragSourceIndex)) {
+    const file = getActiveOpenCadFile();
+    const currentCode = syncOpenCadEditorToActiveFile();
+    const nextCode = applyOpenCadTranslateToCode(currentCode, delta, openCadControls.dragSourceIndex);
+    setOpenCadEditorValue(nextCode, file);
+    handleOpenCadCodeInput();
+    renderOpenCad();
+    setOpenCadStatus(`对象 #${openCadControls.dragSourceIndex + 1} 已移动并同步到 translate()`);
+    return;
+  }
   setOpenCadStatus(
     `${openCadControls.dragSourceIndex === null ? '整体模型' : `对象 #${openCadControls.dragSourceIndex + 1}`} 已临时移动；源码未自动改写`
   );
@@ -1487,6 +2421,7 @@ function isOpenCadRenderableStatement(statement) {
     .replace(/\/\/.*$/gm, '')
     .trim();
   if (!text) return false;
+  if (/^(?:module|function)\s+/.test(text)) return false;
   if (/^\$?[A-Za-z_]\w*\s*=/.test(text)) return false;
   return /^[A-Za-z_]\w*\s*(?:\(|\{)/.test(text);
 }
@@ -1624,7 +2559,12 @@ function animateOpenCad() {
   if (!openCadInitialized) return;
   requestAnimationFrame(animateOpenCad);
   if (openCadRenderer && openCadScene && openCadCamera) {
+    openCadRenderer.clear(true, true, true);
     openCadRenderer.render(openCadScene, openCadCamera);
+    if (openCadInteractionScene && openCadInteractionRoot?.children?.length) {
+      openCadRenderer.clearDepth();
+      openCadRenderer.render(openCadInteractionScene, openCadCamera);
+    }
   }
 }
 
@@ -1633,8 +2573,9 @@ function scheduleOpenCadRender() {
   openCadRenderTimer = setTimeout(markOpenCadCodeDirty, 350);
 }
 
-async function renderOpenCad() {
+async function renderOpenCad(options = {}) {
   if (!openCadInitialized || !openCadScene) return;
+  clearOpenCadInteractionLayer();
   clearTimeout(openCadRenderTimer);
   clearTimeout(openCadEditorSaveTimer);
   openCadHasUnrenderedChanges = false;
@@ -1655,8 +2596,8 @@ async function renderOpenCad() {
     if (!off?.byteLength && !stl?.byteLength) throw new Error('OpenSCAD WASM 返回了空网格');
     const stlColorInfo = getOpenCadStlPreviewColor(code);
     const stlStats = off?.byteLength
-      ? showOpenCadOff(off)
-      : showOpenCadStl(stl, { color: stlColorInfo?.color });
+      ? showOpenCadOff(off, { preserveCamera: Boolean(options.preserveCamera) })
+      : showOpenCadStl(stl, { color: stlColorInfo?.color, preserveCamera: Boolean(options.preserveCamera) });
     clearOpenCadEditorMarkers();
     openCadRenderStatusProtectedUntil = Date.now() + 8000;
     openCadRenderInProgress = false;
@@ -1678,7 +2619,7 @@ async function renderOpenCad() {
     console.info('OpenSCAD WASM unavailable, using preview renderer:', error);
   }
   if (renderSeq !== openCadRenderSeq) return;
-  renderOpenCadPreview(code);
+  renderOpenCadPreview(code, { preserveCamera: Boolean(options.preserveCamera) });
   openCadRenderStatusProtectedUntil = Date.now() + 8000;
   openCadRenderInProgress = false;
 }
@@ -1754,23 +2695,34 @@ async function renderOpenCadWithWorker(code, options = {}) {
   if (!window.Worker) {
     throw createOpenCadWasmLoadError('Web Worker is not supported');
   }
-  if (openCadRenderWorkerBusy && openCadRenderWorker) {
+  const dedicatedWorker = Boolean(options.dedicatedWorker);
+  debugOpenCadGui(options.interactionPreview ? 'worker request' : 'main render worker request', {
+    dedicatedWorker,
+    activeFileName: options.activeFileName || getActiveOpenCadFile()?.name || 'input.scad',
+    codeChars: String(code || '').length,
+  });
+  if (!dedicatedWorker && openCadRenderWorkerBusy && openCadRenderWorker) {
     if (openCadRenderWorkerReject) openCadRenderWorkerReject(new Error('OpenSCAD render canceled'));
     openCadRenderWorker.terminate();
     openCadRenderWorker = null;
     openCadRenderWorkerBusy = false;
     openCadRenderWorkerReject = null;
   }
-  const worker = getOpenCadRenderWorker();
+  const worker = dedicatedWorker
+    ? new Worker('/static/js/opencad.worker.js?v=20260612-off-colors', { type: 'module' })
+    : getOpenCadRenderWorker();
   const activeFile = getActiveOpenCadFile();
-  setOpenCadStatus('OpenSCAD WASM 后台渲染中：加载库文件...');
+  if (activeFile) activeFile.code = getOpenCadEditorValue() || activeFile.code || '';
+  setOpenCadStatus(options.interactionPreview ? '正在生成交互预览：加载库文件...' : 'OpenSCAD WASM 后台渲染中：加载库文件...');
   const libraries = await loadOpenCadLibraryFiles();
   const requestId = ++openCadWorkerRequestSeq;
-  openCadRenderWorkerBusy = true;
+  if (!dedicatedWorker) openCadRenderWorkerBusy = true;
   return new Promise((resolve, reject) => {
     const timeout = setTimeout(() => {
       cleanup();
-      if (openCadRenderWorker === worker) {
+      if (dedicatedWorker) {
+        worker.terminate();
+      } else if (openCadRenderWorker === worker) {
         worker.terminate();
         openCadRenderWorker = null;
         openCadRenderWorkerBusy = false;
@@ -1782,7 +2734,9 @@ async function renderOpenCadWithWorker(code, options = {}) {
       clearTimeout(timeout);
       worker.removeEventListener('message', onMessage);
       worker.removeEventListener('error', onError);
-      if (openCadRenderWorker === worker) {
+      if (dedicatedWorker) {
+        worker.terminate();
+      } else if (openCadRenderWorker === worker) {
         openCadRenderWorkerBusy = false;
         openCadRenderWorkerReject = null;
       }
@@ -1791,35 +2745,43 @@ async function renderOpenCadWithWorker(code, options = {}) {
       const data = event.data || {};
       if (data.id !== requestId) return;
       if (data.type === 'progress') {
-        setOpenCadStatus(`OpenSCAD WASM 后台渲染中：${data.message || '处理中'}...`);
+        if (options.interactionPreview) debugOpenCadGui('worker progress', data.message || '处理中');
+        setOpenCadStatus(options.interactionPreview
+          ? `正在生成交互预览：${data.message || '处理中'}...`
+          : `OpenSCAD WASM 后台渲染中：${data.message || '处理中'}...`);
         return;
       }
       cleanup();
       if (data.type === 'result') {
         const stl = data.stl instanceof Uint8Array ? data.stl : new Uint8Array(data.stl || []);
         const off = data.off instanceof Uint8Array ? data.off : new Uint8Array(data.off || []);
+        if (options.interactionPreview) {
+          debugOpenCadGui('worker result received', { offBytes: off.byteLength, stlBytes: stl.byteLength });
+        }
         if (stl.byteLength) openCadLastStl = stl;
         resolve({ stl, off });
       } else {
+        if (options.interactionPreview) debugOpenCadGui('worker error message', data.message || 'unknown');
         reject(new Error(data.message || 'OpenSCAD WASM worker render failed'));
       }
     };
     const onError = error => {
       cleanup();
-      if (openCadRenderWorker === worker) {
+      if (!dedicatedWorker && openCadRenderWorker === worker) {
         worker.terminate();
         openCadRenderWorker = null;
       }
+      if (options.interactionPreview) debugOpenCadGui('worker error event', error.message || 'OpenSCAD WASM worker failed');
       reject(createOpenCadWasmLoadError(error.message || 'OpenSCAD WASM worker failed', error));
     };
-    openCadRenderWorkerReject = reject;
+    if (!dedicatedWorker) openCadRenderWorkerReject = reject;
     worker.addEventListener('message', onMessage);
     worker.addEventListener('error', onError);
     worker.postMessage({
       type: 'render',
       id: requestId,
       code,
-      activeFileName: activeFile?.name || 'input.scad',
+      activeFileName: options.activeFileName || activeFile?.name || 'input.scad',
       files: openCadFiles.map(file => ({ name: file.name, code: file.code || '' })),
       libraries,
       outputFormat: options.outputFormat === 'stl' ? 'stl' : 'off',
@@ -1862,7 +2824,7 @@ async function renderOpenCadWithWasm(code, options = {}) {
     cleanupOpenCadWasmFile(instance, filePath);
     instance.FS.writeFile(filePath, file.code || '');
   }
-  const inputPath = '/' + sanitizeOpenCadFileName(activeFile?.name || 'input.scad');
+  const inputPath = '/' + sanitizeOpenCadFileName(options.activeFileName || activeFile?.name || 'input.scad');
   instance.FS.writeFile(inputPath, code);
   let exitCode = 0;
   try {
@@ -1947,10 +2909,11 @@ function stringToOpenCadBytes(value) {
   return new TextEncoder().encode(String(value || ''));
 }
 
-function renderOpenCadPreview(code) {
+function renderOpenCadPreview(code, options = {}) {
   try {
-    const ast = parseOpenScad(code);
-    const sourceParts = splitOpenCadTopLevelStatements(code);
+    const previewCode = getOpenCadPreviewRenderableCode(code);
+    const ast = parseOpenScad(previewCode);
+    const sourceParts = splitOpenCadTopLevelStatements(previewCode);
     const renderableSourceParts = sourceParts
       .map((part, index) => ({ ...part, sourcePartIndex: index }))
       .filter(part => isOpenCadRenderableStatement(part.text));
@@ -1962,17 +2925,31 @@ function renderOpenCadPreview(code) {
       if (obj) {
         if (renderableSourceParts[index]) {
           tagOpenCadSourceObject(obj, renderableSourceParts[index].sourcePartIndex);
+          const guiObjectId = extractOpenCadGuiObjectId(renderableSourceParts[index].text);
+          if (guiObjectId) tagOpenCadGuiObject(obj, guiObjectId);
         }
         openCadModelRoot.add(obj);
       }
     });
     openCadScene.add(openCadModelRoot);
     applyOpenCadWireframe();
-    fitOpenCadCamera();
+    if (!options.preserveCamera) fitOpenCadCamera();
     setOpenCadStatus(warnings.length ? warnings.join(' · ') : '渲染完成', false, { clearError: true });
   } catch (error) {
     setOpenCadStatus(error.message || String(error), true);
   }
+}
+
+function getOpenCadPreviewRenderableCode(code) {
+  return splitOpenCadTopLevelStatements(code)
+    .filter(part => isOpenCadRenderableStatement(part.text))
+    .map(part => part.text)
+    .join('\n\n');
+}
+
+function extractOpenCadGuiObjectId(text) {
+  const match = String(text || '').match(/^\s*\/\/\s*@(cad|oh):id=([A-Za-z0-9_:-]+)/m);
+  return match ? match[2] : '';
 }
 
 function tagOpenCadSourceObject(object, sourceIndex) {
@@ -1982,36 +2959,34 @@ function tagOpenCadSourceObject(object, sourceIndex) {
   });
 }
 
-function showOpenCadStl(bytes, options = {}) {
-  if (openCadModelRoot) openCadScene.remove(openCadModelRoot);
+function tagOpenCadGuiObject(object, objectId) {
+  object.userData.openCadGuiObjectId = objectId;
+  object.traverse(child => {
+    child.userData.openCadGuiObjectId = objectId;
+  });
+}
+
+function buildOpenCadStlObject(bytes, options = {}) {
+  if (!bytes?.byteLength) return null;
   const geometry = parseOpenCadStl(bytes);
   geometry.computeBoundingSphere();
   const triangles = Math.floor((geometry.getAttribute('position')?.count || 0) / 3);
-  if (!triangles) throw new Error('STL 中没有可显示的三角面');
+  if (!triangles) return null;
   const material = new THREE.MeshStandardMaterial({
     color: options.color || 0x60a5fa,
     roughness: 0.55,
     metalness: options.color ? 0.12 : 0.05,
   });
-  openCadModelRoot = new THREE.Group();
-  openCadModelRoot.add(new THREE.Mesh(geometry, material));
-  openCadScene.add(openCadModelRoot);
-  applyOpenCadWireframe();
-  fitOpenCadCamera();
-  return { triangles, bytes: bytes.byteLength || 0, coloredParts: 0 };
+  const group = new THREE.Group();
+  group.add(new THREE.Mesh(geometry, material));
+  group.userData.openCadStats = { triangles, bytes: bytes.byteLength || 0, coloredParts: 0 };
+  return group;
 }
 
-function formatOpenCadBytes(bytes) {
-  const size = Number(bytes || 0);
-  if (size >= 1024 * 1024) return `${(size / 1024 / 1024).toFixed(1)} MB`;
-  if (size >= 1024) return `${(size / 1024).toFixed(1)} KB`;
-  return `${size} B`;
-}
-
-function showOpenCadOff(bytes) {
-  if (openCadModelRoot) openCadScene.remove(openCadModelRoot);
+function buildOpenCadOffObject(bytes) {
+  if (!bytes?.byteLength) return null;
   const parsed = parseOpenCadOff(bytes);
-  openCadModelRoot = new THREE.Group();
+  const group = new THREE.Group();
   let triangles = 0;
   for (const part of parsed.parts) {
     const geometry = new THREE.BufferGeometry();
@@ -2027,18 +3002,43 @@ function showOpenCadOff(bytes) {
       transparent: alpha < 1,
     });
     triangles += part.positions.length / 9;
-    openCadModelRoot.add(new THREE.Mesh(geometry, material));
+    group.add(new THREE.Mesh(geometry, material));
   }
-  if (!triangles) throw new Error('OFF 中没有可显示的三角面');
-  openCadScene.add(openCadModelRoot);
-  applyOpenCadWireframe();
-  fitOpenCadCamera();
-  return {
+  if (!triangles) return null;
+  group.userData.openCadStats = {
     triangles,
     bytes: bytes.byteLength || 0,
     coloredParts: parsed.parts.length,
     coloredFormat: 'off',
   };
+  return group;
+}
+
+function showOpenCadStl(bytes, options = {}) {
+  if (openCadModelRoot) openCadScene.remove(openCadModelRoot);
+  openCadModelRoot = buildOpenCadStlObject(bytes, options);
+  if (!openCadModelRoot) throw new Error('STL 中没有可显示的三角面');
+  openCadScene.add(openCadModelRoot);
+  applyOpenCadWireframe();
+  if (!options.preserveCamera) fitOpenCadCamera();
+  return openCadModelRoot.userData.openCadStats;
+}
+
+function formatOpenCadBytes(bytes) {
+  const size = Number(bytes || 0);
+  if (size >= 1024 * 1024) return `${(size / 1024 / 1024).toFixed(1)} MB`;
+  if (size >= 1024) return `${(size / 1024).toFixed(1)} KB`;
+  return `${size} B`;
+}
+
+function showOpenCadOff(bytes, options = {}) {
+  if (openCadModelRoot) openCadScene.remove(openCadModelRoot);
+  openCadModelRoot = buildOpenCadOffObject(bytes);
+  if (!openCadModelRoot) throw new Error('OFF 中没有可显示的三角面');
+  openCadScene.add(openCadModelRoot);
+  applyOpenCadWireframe();
+  if (!options.preserveCamera) fitOpenCadCamera();
+  return openCadModelRoot.userData.openCadStats;
 }
 
 function parseOpenCadOff(bytes) {

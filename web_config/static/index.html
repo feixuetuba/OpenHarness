@@ -1211,6 +1211,10 @@
             <div id="openCadEditorPane" class="open-cad-editor-pane flex flex-col min-h-[260px]">
               <div class="px-3 py-2 border-b border-dark-border flex flex-wrap gap-2 items-center bg-dark-bg/40 shrink-0">
                 <button onclick="renderOpenCad()" class="btn-primary text-xs px-3 py-1.5">渲染</button>
+                <label class="open-cad-auto-render-toggle" title="代码修改后自动更新 3D 预览">
+                  <input id="openCadAutoRenderToggle" type="checkbox" onchange="toggleOpenCadAutoRender(this.checked)">
+                  <span>自动渲染</span>
+                </label>
                 <button onclick="resetOpenCadCode()" class="btn-secondary text-xs px-3 py-1.5">示例</button>
                 <button onclick="copyOpenCadCode()" class="btn-secondary text-xs px-3 py-1.5">复制代码</button>
                 <button onclick="showOpenCadDiff()" class="btn-secondary text-xs px-3 py-1.5">查看改动</button>
@@ -1255,21 +1259,60 @@
           </div>
           <div id="openCadMainSplitter" class="open-cad-main-splitter" title="拖动调整代码区和预览区比例"></div>
           <div id="openCadPreviewPanel" class="flex-1 flex flex-col min-w-[320px]">
-            <div class="px-4 py-3 border-b border-dark-border flex items-center justify-between gap-3">
-              <div class="flex items-center gap-3">
-                <span class="text-sm font-semibold text-text-primary">3D 预览</span>
-                <span class="text-xs text-text-muted">拖空白旋转，拖模型移动，滚轮缩放</span>
+            <div class="open-cad-preview-toolbar border-b border-dark-border">
+              <div class="open-cad-preview-toolbar-row">
+                <div class="flex items-center gap-3 min-w-0">
+                  <span class="text-sm font-semibold text-text-primary shrink-0">3D 预览</span>
+                  <span class="text-xs text-text-muted truncate">拖空白旋转，拖模型移动，滚轮缩放</span>
+                </div>
+                <div class="flex gap-2 shrink-0">
+                  <button onclick="fitOpenCadCamera()" class="btn-secondary text-xs px-3 py-1.5">适配视图</button>
+                  <button onclick="toggleOpenCadWireframe()" class="btn-secondary text-xs px-3 py-1.5">线框</button>
+                </div>
               </div>
-              <div class="flex gap-2">
-                <button onclick="fitOpenCadCamera()" class="btn-secondary text-xs px-3 py-1.5">适配视图</button>
-                <button onclick="toggleOpenCadWireframe()" class="btn-secondary text-xs px-3 py-1.5">线框</button>
+              <div id="openCadGuiToolbar" class="open-cad-gui-toolbar">
+                <div class="open-cad-gui-group">
+                  <span class="open-cad-gui-label">创建</span>
+                  <button onclick="insertOpenCadGuiPrimitive('cube')" class="open-cad-gui-chip">立方体</button>
+                  <button onclick="insertOpenCadGuiPrimitive('cylinder')" class="open-cad-gui-chip">圆柱体</button>
+                  <button onclick="insertOpenCadGuiPrimitive('sphere')" class="open-cad-gui-chip">球体</button>
+                </div>
+                <div class="open-cad-gui-group">
+                  <span class="open-cad-gui-label">工件</span>
+                  <select id="openCadGuiModuleSelect" class="open-cad-gui-select"></select>
+                  <button onclick="insertSelectedOpenCadGuiModule()" class="open-cad-gui-chip">插入</button>
+                </div>
+                <div class="open-cad-gui-group">
+                  <span class="open-cad-gui-label">操作</span>
+                  <button onclick="insertOpenCadGuiBoolean('union')" class="open-cad-gui-chip">Union</button>
+                  <button onclick="insertOpenCadGuiBoolean('difference')" class="open-cad-gui-chip">Difference</button>
+                  <button onclick="insertOpenCadGuiBoolean('intersection')" class="open-cad-gui-chip">Intersection</button>
+                </div>
+                <div class="open-cad-gui-group">
+                  <span class="open-cad-gui-label">变换</span>
+                  <button onclick="insertOpenCadGuiTransform('translate')" id="openCadToolTranslate" class="open-cad-gui-chip">平移</button>
+                  <button onclick="insertOpenCadGuiTransform('rotate')" id="openCadToolRotate" class="open-cad-gui-chip">旋转</button>
+                  <button onclick="insertOpenCadGuiTransform('scale')" id="openCadToolScale" class="open-cad-gui-chip">缩放</button>
+                </div>
+                <div class="open-cad-gui-group">
+                  <span class="open-cad-gui-label">轴</span>
+                  <button onclick="setOpenCadGuiTransformAxis('free')" id="openCadAxisFree" class="open-cad-gui-chip">自由</button>
+                  <button onclick="setOpenCadGuiTransformAxis('x')" id="openCadAxisX" class="open-cad-gui-chip open-cad-axis-x">X</button>
+                  <button onclick="setOpenCadGuiTransformAxis('y')" id="openCadAxisY" class="open-cad-gui-chip open-cad-axis-y">Y</button>
+                  <button onclick="setOpenCadGuiTransformAxis('z')" id="openCadAxisZ" class="open-cad-gui-chip open-cad-axis-z">Z</button>
+                </div>
               </div>
             </div>
             <div class="relative flex-1 min-h-0">
               <div id="openCadViewport" class="absolute inset-0"></div>
+              <div id="openCadGuiObjectSelect" class="open-cad-object-rail" aria-label="可操作对象"></div>
               <div id="openCadOverlay" class="open-cad-overlay">
                 <div id="openCadOverlayTitle" class="open-cad-overlay-title">渲染状态</div>
                 <pre id="openCadOverlayMessage" class="open-cad-overlay-message">优先使用本地 OpenSCAD WASM 渲染 STL；未安装 WASM 产物时使用内置基础预览。</pre>
+              </div>
+              <div id="openCadGuiDebugShell" class="open-cad-gui-debug-shell hidden">
+                <button id="openCadGuiDebugToggle" class="open-cad-gui-debug-toggle" onclick="toggleOpenCadGuiDebug()" type="button">Debug</button>
+                <pre id="openCadGuiDebug" class="open-cad-gui-debug hidden" aria-live="polite"></pre>
               </div>
               <div class="open-cad-view-gizmo" aria-label="坐标轴方向">
                 <svg id="openCadViewGizmoSvg" viewBox="0 0 112 112" role="img" aria-label="当前视角坐标轴">
