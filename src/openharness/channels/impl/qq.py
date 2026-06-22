@@ -508,6 +508,10 @@ class QQChannel(BaseChannel):
 
     @staticmethod
     def _extract_reply_to(data: "C2CMessage") -> str | None:
+        reference = getattr(data, "message_reference", None)
+        referenced_id = getattr(reference, "message_id", None)
+        if referenced_id:
+            return str(referenced_id)
         for field in ("reply_to", "reply_to_message_id", "source_msg_id", "referenced_message_id"):
             value = getattr(data, field, None)
             if value:

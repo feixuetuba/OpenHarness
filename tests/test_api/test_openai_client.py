@@ -19,6 +19,7 @@ from openharness.api.openai_client import (
     _token_limit_param_for_model,
 )
 from openharness.engine.messages import (
+    AudioBlock,
     ConversationMessage,
     ImageBlock,
     TextBlock,
@@ -104,6 +105,22 @@ class TestConvertMessagesToOpenai:
         assert result[0]["content"][1] == {
             "type": "image_url",
             "image_url": {"url": "data:image/png;base64,YWJj"},
+        }
+
+    def test_user_audio_message(self):
+        messages = [
+            ConversationMessage(
+                role="user",
+                content=[
+                    TextBlock(text="Transcribe this."),
+                    AudioBlock(media_type="audio/wav", data="UklGRg==", source_path="/tmp/a.wav"),
+                ],
+            )
+        ]
+        result = _convert_messages_to_openai(messages, None)
+        assert result[0]["content"][1] == {
+            "type": "input_audio",
+            "input_audio": {"data": "UklGRg==", "format": "wav"},
         }
 
     def test_assistant_text_message(self):

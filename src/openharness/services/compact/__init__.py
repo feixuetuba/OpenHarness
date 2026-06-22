@@ -19,6 +19,7 @@ from typing import Any, Awaitable, Callable, Literal
 from uuid import uuid4
 
 from openharness.engine.messages import (
+    AudioBlock,
     ConversationMessage,
     ContentBlock,
     ImageBlock,
@@ -74,6 +75,7 @@ DEFAULT_GAP_THRESHOLD_MINUTES = 60
 # Token estimation padding (conservative)
 TOKEN_ESTIMATION_PADDING = 4 / 3
 _DEFAULT_VISION_IMAGE_TOKEN_ESTIMATE = 3_072
+_DEFAULT_AUDIO_ATTACHMENT_TOKEN_ESTIMATE = 3_072
 
 # Default context windows per model family
 _DEFAULT_CONTEXT_WINDOW = 200_000
@@ -128,6 +130,8 @@ def estimate_message_tokens(messages: list[ConversationMessage]) -> int:
                 total += estimate_tokens(str(block.input))
             elif isinstance(block, ImageBlock):
                 total += image_token_estimate
+            elif isinstance(block, AudioBlock):
+                total += _DEFAULT_AUDIO_ATTACHMENT_TOKEN_ESTIMATE
     return int(total * TOKEN_ESTIMATION_PADDING)
 
 
@@ -149,7 +153,7 @@ def _vision_token_budget_per_image() -> int:
 def _replace_images_with_compaction_placeholders(
     messages: list[ConversationMessage],
 ) -> list[ConversationMessage]:
-    """Strip image payloads from summarizer-only compact requests."""
+    """Strip media payloads from summarizer-only compact requests."""
     replaced: list[ConversationMessage] = []
     for message in messages:
         next_content: list[ContentBlock] = []
@@ -161,6 +165,14 @@ def _replace_images_with_compaction_placeholders(
                 next_content.append(
                     TextBlock(
                         text=f"[Image omitted from compaction summarization; source: {label}.]\n"
+                    )
+                )
+            elif isinstance(block, AudioBlock):
+                changed = True
+                label = block.source_path.strip() or "inline"
+                next_content.append(
+                    TextBlock(
+                        text=f"[Audio omitted from compaction summarization; source: {label}.]\n"
                     )
                 )
             else:
@@ -368,7 +380,7 @@ def _extract_attachment_paths(messages: list[ConversationMessage]) -> list[str]:
     attachment_pattern = re.compile(r"\[attachment:\s*([^\]]+)\]")
     for message in messages:
         for block in message.content:
-            if isinstance(block, ImageBlock) and block.source_path:
+            if isinstance(block, (ImageBlock, AudioBlock)) and block.source_path:
                 path = str(Path(block.source_path).expanduser())
                 if path not in seen:
                     seen.add(path)

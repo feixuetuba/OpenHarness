@@ -593,6 +593,38 @@
                 <input type="number" id="newAgentMaxTurns" class="form-input" placeholder="留空则使用默认值">
               </div>
             </div>
+            <div class="form-section">
+              <div class="form-item">
+                <label class="form-label">图片处理供应商 / Profile（可选）</label>
+                <select id="newAgentImageProfile" class="form-input" onchange="updateAttachmentModelChoices('image')">
+                  <option value="">不支持图片处理</option>
+                </select>
+                <div class="flex flex-wrap gap-2 mt-2">
+                  <select id="newAgentImageModelSelect" class="form-input flex-1 min-w-[220px]" onchange="syncAttachmentModelFromSelect('image')">
+                    <option value="">使用所选供应商默认模型</option>
+                  </select>
+                  <button type="button" onclick="refreshAttachmentModelList('image')" class="btn-secondary text-xs px-3 py-1.5">刷新模型列表</button>
+                </div>
+                <input type="text" id="newAgentImageModel" class="form-input mt-2" placeholder="也可以手动输入图片模型名称">
+                <p id="agentImageModelHint" class="text-xs text-text-muted mt-2">未配置时，Agent 不会获得图片读取工具。</p>
+              </div>
+            </div>
+            <div class="form-section">
+              <div class="form-item">
+                <label class="form-label">音频处理供应商 / Profile（可选）</label>
+                <select id="newAgentAudioProfile" class="form-input" onchange="updateAttachmentModelChoices('audio')">
+                  <option value="">不支持音频处理</option>
+                </select>
+                <div class="flex flex-wrap gap-2 mt-2">
+                  <select id="newAgentAudioModelSelect" class="form-input flex-1 min-w-[220px]" onchange="syncAttachmentModelFromSelect('audio')">
+                    <option value="">使用所选供应商默认模型</option>
+                  </select>
+                  <button type="button" onclick="refreshAttachmentModelList('audio')" class="btn-secondary text-xs px-3 py-1.5">刷新模型列表</button>
+                </div>
+                <input type="text" id="newAgentAudioModel" class="form-input mt-2" placeholder="也可以手动输入音频模型名称">
+                <p id="agentAudioModelHint" class="text-xs text-text-muted mt-2">音频需要 OpenAI-compatible Profile；未配置时不支持音频处理。</p>
+              </div>
+            </div>
             <div class="flex flex-wrap gap-2 items-center pt-4 border-t border-dark-border">
               <button onclick="saveAgent()" class="btn-primary">保存</button>
               <button onclick="hideAddAgentForm()" class="btn-secondary">取消</button>

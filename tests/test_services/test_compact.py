@@ -8,7 +8,14 @@ import pytest
 
 from openharness.api.client import ApiMessageCompleteEvent
 from openharness.api.usage import UsageSnapshot
-from openharness.engine.messages import ConversationMessage, ImageBlock, TextBlock, ToolResultBlock, ToolUseBlock
+from openharness.engine.messages import (
+    AudioBlock,
+    ConversationMessage,
+    ImageBlock,
+    TextBlock,
+    ToolResultBlock,
+    ToolUseBlock,
+)
 from openharness.hooks import HookEvent
 from openharness.services import (
     build_post_compact_messages,
@@ -293,6 +300,17 @@ def test_compact_token_estimate_counts_images(monkeypatch):
     ]
 
     assert estimate_compact_message_tokens(messages) == 8000
+
+
+def test_compact_token_estimate_counts_audio():
+    messages = [
+        ConversationMessage(
+            role="user",
+            content=[AudioBlock(media_type="audio/wav", data="UklGRg==")],
+        )
+    ]
+
+    assert estimate_compact_message_tokens(messages) == 4096
 
 
 def test_should_autocompact_counts_image_tokens(monkeypatch):

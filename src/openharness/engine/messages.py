@@ -37,6 +37,25 @@ class ImageBlock(BaseModel):
         return cls(media_type=media_type, data=payload, source_path=str(resolved))
 
 
+class AudioBlock(BaseModel):
+    """Audio content encoded inline for providers with native audio input."""
+
+    type: Literal["audio"] = "audio"
+    media_type: str
+    data: str
+    source_path: str = ""
+
+    @classmethod
+    def from_path(cls, path: str | Path) -> "AudioBlock":
+        """Load a local audio file into a base64-backed content block."""
+        resolved = Path(path).expanduser().resolve()
+        media_type, _ = mimetypes.guess_type(str(resolved))
+        if not media_type or not media_type.startswith("audio/"):
+            raise ValueError(f"Unsupported audio attachment: {resolved}")
+        payload = base64.b64encode(resolved.read_bytes()).decode("ascii")
+        return cls(media_type=media_type, data=payload, source_path=str(resolved))
+
+
 class ToolUseBlock(BaseModel):
     """A request from the model to execute a named tool."""
 
@@ -57,7 +76,7 @@ class ToolResultBlock(BaseModel):
 
 
 ContentBlock = Annotated[
-    TextBlock | ImageBlock | ToolUseBlock | ToolResultBlock,
+    TextBlock | ImageBlock | AudioBlock | ToolUseBlock | ToolResultBlock,
     Field(discriminator="type"),
 ]
 
@@ -111,7 +130,7 @@ class ConversationMessage(BaseModel):
             for block in self.content:
                 if isinstance(block, TextBlock) and block.text.strip():
                     return False
-                if isinstance(block, (ImageBlock, ToolUseBlock, ToolResultBlock)):
+                if isinstance(block, (ImageBlock, AudioBlock, ToolUseBlock, ToolResultBlock)):
                     return False
         return True
 
@@ -179,6 +198,16 @@ def serialize_content_block(block: ContentBlock) -> dict[str, Any]:
     if isinstance(block, ImageBlock):
         return {
             "type": "image",
+            "source": {
+                "type": "base64",
+                "media_type": block.media_type,
+                "data": block.data,
+            },
+        }
+
+    if isinstance(block, AudioBlock):
+        return {
+            "type": "audio",
             "source": {
                 "type": "base64",
                 "media_type": block.media_type,

@@ -9,6 +9,7 @@ import os
 import re
 import shutil
 import time
+import traceback
 from pathlib import Path
 from typing import Any
 
@@ -36,6 +37,8 @@ from openharness.ui.coordinator_drain import (
     wait_for_completed_async_agent_entries,
 )
 from openharness.ui.runtime import RuntimeBundle, build_runtime, close_runtime, start_runtime
+from openharness.utils.file_lock import exclusive_file_lock
+from openharness.utils.fs import atomic_write_text
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +54,9 @@ SOCIAL_ENGINE_EVENT_TIMEOUT_SECONDS = 180.0
 SOCIAL_DIAGNOSTIC_AGENT_TIMEOUT_SECONDS = 120.0
 SOCIAL_ASYNC_AGENT_WAIT_SECONDS = 300.0
 RECENT_MEDIA_TTL_SECONDS = 30 * 60
+MESSAGE_REFERENCE_TTL_SECONDS = 30 * 24 * 60 * 60
+MAX_PERSISTED_MESSAGE_REFERENCES = 2_000
+MESSAGE_REFERENCE_INDEX_FILENAME = ".message_reference_index.json"
 FILE_EXPECTATION_RE = re.compile(r"\[(?:期待文件|等待文件)(?:\s*[:：]\s*(.+?))?\]|\[无需文件\]", re.IGNORECASE)
 SOCIAL_OUTPUT_INSTRUCTIONS = (
     "\n\n[社交平台输出约定]\n"
@@ -95,6 +101,7 @@ class WebConfigSmartChannelBridge:
         self._agent_engines: dict[str, "QueryEngine"] = {}
         self._states: dict[str, dict[str, Any]] = {}
         self._messages_by_id: dict[str, dict[str, Any]] = {}
+        self._loaded_message_index_channels: set[str] = set()
         self._active_tasks: set[asyncio.Task] = set()
 
     async def start(self) -> None:
@@ -122,6 +129,10 @@ class WebConfigSmartChannelBridge:
         if self._active_tasks:
             await asyncio.gather(*self._active_tasks, return_exceptions=True)
         logger.info("WebConfigSmartChannelBridge stopped")
+
+    def invalidate_agent(self, agent_id: str) -> None:
+        """Drop a cached Agent engine so edited provider settings apply next turn."""
+        self._agent_engines.pop(agent_id, None)
 
     async def _loop(self) -> None:
         while self._running:
@@ -151,6 +162,7 @@ class WebConfigSmartChannelBridge:
                 "session_key": msg.session_key,
                 "content": msg.content,
                 "media": list(msg.media or []),
+                "reply_to": (msg.metadata or {}).get("reply_to"),
             },
         )
         key = self._state_key(msg)
@@ -1429,17 +1441,21 @@ class WebConfigSmartChannelBridge:
         message_id = self._message_id(msg)
         if not message_id:
             return
+        self._ensure_message_index_loaded(msg.channel)
         self._messages_by_id[f"{msg.channel}:{message_id}"] = {
             "content": msg.content,
             "media": list(media_paths if media_paths is not None else self._extract_media_paths(msg)),
             "metadata": dict(msg.metadata or {}),
+            "sender_id": msg.sender_id,
+            "chat_id": msg.chat_id,
+            "timestamp": time.time(),
         }
-        if len(self._messages_by_id) > 1000:
-            for old_key in list(self._messages_by_id)[:100]:
-                self._messages_by_id.pop(old_key, None)
+        self._prune_message_index(msg.channel)
+        self._persist_message_index(msg.channel)
 
     def _resolve_quoted_message(self, msg: InboundMessage) -> dict[str, Any] | None:
         metadata = msg.metadata or {}
+        self._ensure_message_index_loaded(msg.channel)
         candidates = [
             metadata.get("reply_to"),
             metadata.get("reply_to_message_id"),
@@ -1455,15 +1471,164 @@ class WebConfigSmartChannelBridge:
             if value is None:
                 continue
             found = self._messages_by_id.get(f"{msg.channel}:{value}")
-            if found:
-                return found
+            if found and (
+                not str(found.get("chat_id") or "").strip()
+                or str(found.get("chat_id")) == str(msg.chat_id)
+            ):
+                return self._usable_referenced_message(found)
         referenced = metadata.get("referenced_message")
         if isinstance(referenced, dict):
             content = str(referenced.get("content") or "").strip()
             media = [str(p) for p in referenced.get("media", []) if isinstance(p, str) and p.strip()]
             if content or media:
-                return {"content": content, "media": media, "metadata": referenced}
+                return self._usable_referenced_message(
+                    {"content": content, "media": media, "metadata": referenced}
+                )
+        missing_reference = next(
+            (
+                str(value).strip()
+                for value in candidates
+                if value is not None and str(value).strip()
+            ),
+            "",
+        )
+        if missing_reference:
+            return {
+                "content": (
+                    f"引用消息 {missing_reference} 未在本地引用索引中找到，"
+                    "引用附件不可用。不要为附件编造路径；"
+                    "请明确要求用户重新发送原图片或音频。"
+                ),
+                "media": [],
+                "metadata": {
+                    "reference_unavailable": True,
+                    "referenced_message_id": missing_reference,
+                },
+            }
         return None
+
+    @staticmethod
+    def _message_index_path(channel: str) -> Path:
+        return resolve_social_bot_dir(channel) / MESSAGE_REFERENCE_INDEX_FILENAME
+
+    def _ensure_message_index_loaded(self, channel: str) -> None:
+        if channel in self._loaded_message_index_channels:
+            return
+        self._loaded_message_index_channels.add(channel)
+        path = self._message_index_path(channel)
+        if not path.exists():
+            return
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            records = payload.get("messages", {}) if isinstance(payload, dict) else {}
+            if not isinstance(records, dict):
+                return
+            for message_id, raw_entry in records.items():
+                if not isinstance(raw_entry, dict):
+                    continue
+                entry = {
+                    "content": str(raw_entry.get("content") or ""),
+                    "media": [
+                        str(item)
+                        for item in raw_entry.get("media", [])
+                        if isinstance(item, str) and item.strip()
+                    ],
+                    "metadata": (
+                        dict(raw_entry.get("metadata") or {})
+                        if isinstance(raw_entry.get("metadata"), dict)
+                        else {}
+                    ),
+                    "sender_id": str(raw_entry.get("sender_id") or ""),
+                    "chat_id": str(raw_entry.get("chat_id") or ""),
+                    "timestamp": (
+                        float(raw_entry.get("timestamp") or 0)
+                        if isinstance(raw_entry.get("timestamp"), (int, float))
+                        else 0.0
+                    ),
+                }
+                self._messages_by_id[f"{channel}:{message_id}"] = entry
+            self._prune_message_index(channel)
+        except Exception:
+            traceback.print_exc()
+
+    def _prune_message_index(self, channel: str) -> None:
+        prefix = f"{channel}:"
+        now = time.time()
+        records = [
+            (key, entry)
+            for key, entry in self._messages_by_id.items()
+            if key.startswith(prefix)
+        ]
+        for key, entry in records:
+            raw_timestamp = entry.get("timestamp")
+            timestamp = float(raw_timestamp) if isinstance(raw_timestamp, (int, float)) else 0
+            if timestamp and now - timestamp > MESSAGE_REFERENCE_TTL_SECONDS:
+                self._messages_by_id.pop(key, None)
+        records = sorted(
+            (
+                (key, entry)
+                for key, entry in self._messages_by_id.items()
+                if key.startswith(prefix)
+            ),
+            key=lambda item: float(item[1].get("timestamp") or 0),
+            reverse=True,
+        )
+        for key, _entry in records[MAX_PERSISTED_MESSAGE_REFERENCES:]:
+            self._messages_by_id.pop(key, None)
+
+    def _persist_message_index(self, channel: str) -> None:
+        path = self._message_index_path(channel)
+        prefix = f"{channel}:"
+        records = {
+            key[len(prefix):]: entry
+            for key, entry in self._messages_by_id.items()
+            if key.startswith(prefix)
+        }
+        try:
+            safe_records = json.loads(json.dumps(records, ensure_ascii=False, default=str))
+            payload = {
+                "version": 1,
+                "updated_at": time.time(),
+                "messages": safe_records,
+            }
+            with exclusive_file_lock(path.with_suffix(path.suffix + ".lock")):
+                atomic_write_text(
+                    path,
+                    json.dumps(payload, ensure_ascii=False, indent=2),
+                    encoding="utf-8",
+                )
+        except Exception:
+            traceback.print_exc()
+
+    @staticmethod
+    def _usable_referenced_message(found: dict[str, Any]) -> dict[str, Any]:
+        content = str(found.get("content") or "").strip()
+        raw_media = [
+            str(item)
+            for item in found.get("media", []) or []
+            if isinstance(item, str) and item.strip()
+        ]
+        media = []
+        for raw_path in raw_media:
+            path = Path(str(raw_path)).expanduser()
+            if path.is_file():
+                media.append(str(path.resolve()))
+        if media:
+            return {**found, "content": content, "media": media}
+        if not raw_media:
+            return {**found, "content": content, "media": []}
+        return {
+            **found,
+            "content": (f"{content}\n\n" if content else "") + (
+                "该引用消息原本包含附件，但本地附件文件已不存在。"
+                "不要为附件编造路径；请要求用户重新发送原附件。"
+            ),
+            "media": [],
+            "metadata": {
+                **(found.get("metadata") or {}),
+                "reference_attachment_missing": True,
+            },
+        }
 
     @staticmethod
     def _state_key(msg: InboundMessage) -> str:
@@ -2071,6 +2236,9 @@ class WebConfigChannelRuntime:
                 from openharness.bridge import get_bridge_manager
                 from openharness.prompts import build_runtime_system_prompt
                 from openharness.config.paths import get_config_dir
+                from openharness.tools.read_attachment_tool import (
+                    attachment_model_configs_from_agent,
+                )
 
                 logger.info("ChannelBridge: create_engine_for_agent called with agent_id=%s", agent_id)
 
@@ -2206,6 +2374,9 @@ class WebConfigChannelRuntime:
                         "extra_skill_dirs": (),
                         "extra_plugin_roots": (),
                         "session_id": agent_id,
+                        "attachment_model_configs": attachment_model_configs_from_agent(
+                            web_agent
+                        ),
                     },
                 )
                 if yaml_agent_def and yaml_agent_def.effort is not None:
@@ -2267,6 +2438,10 @@ class WebConfigChannelRuntime:
         else:
             assignments.pop(channel_name, None)
         self._raw_settings["bot_agent_assignments"] = assignments
+
+    def invalidate_agent(self, agent_id: str) -> None:
+        if self._bridge is not None:
+            self._bridge.invalidate_agent(agent_id)
 
     @staticmethod
     def _looks_like_local_llm_endpoint(base_url: str | None) -> bool:

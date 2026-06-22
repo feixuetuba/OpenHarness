@@ -93,6 +93,12 @@ def _get_agents_file() -> Path:
     return get_config_dir() / "agents.json"
 
 
+def _invalidate_runtime_agent(agent_id: str) -> None:
+    runtime = getattr(app.state, "channel_runtime", None)
+    if runtime is not None:
+        runtime.invalidate_agent(agent_id)
+
+
 def _get_opencad_workspace_file() -> Path:
     """Return the persisted OpenCAD workspace file path."""
     from openharness.config.paths import get_config_dir
@@ -523,6 +529,10 @@ class AgentConfig(BaseModel):
     profile: str | None = None
     model: str | None = None
     max_turns: int | None = None
+    image_profile: str | None = None
+    image_model: str | None = None
+    audio_profile: str | None = None
+    audio_model: str | None = None
 
 
 class AgentChatRequest(BaseModel):
@@ -532,6 +542,35 @@ class AgentChatRequest(BaseModel):
     profile: str | None = None
     model: str | None = None
     attachments: list[dict[str, Any]] | None = None
+
+
+def _validate_agent_attachment_profiles(agent: AgentConfig) -> None:
+    """Reject missing profiles and audio transports that cannot carry audio input."""
+    profiles = _get_settings_obj().merged_profiles()
+    for kind in ("image", "audio"):
+        profile_name = str(getattr(agent, f"{kind}_profile") or "").strip()
+        model_name = str(getattr(agent, f"{kind}_model") or "").strip()
+        if model_name and not profile_name:
+            raise HTTPException(
+                status_code=400,
+                detail=f"{kind}_profile is required when {kind}_model is configured",
+            )
+        if not profile_name:
+            continue
+        profile = profiles.get(profile_name)
+        if profile is None:
+            raise HTTPException(status_code=400, detail=f"Unknown profile: {profile_name}")
+        if kind == "audio" and (
+            profile.provider == "openai_codex"
+            or profile.api_format not in {"openai", "openai_compat", "copilot"}
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Profile '{profile_name}' uses {profile.api_format} and cannot carry "
+                    "audio input; choose an OpenAI-compatible profile"
+                ),
+            )
 
 
 class OpenCadFile(BaseModel):
@@ -995,6 +1034,7 @@ async def get_agents():
 @app.post("/api/agents")
 async def create_agent(agent: AgentConfig):
     """Create a web-config agent preset."""
+    _validate_agent_attachment_profiles(agent)
     payload = _load_agents_payload()
     agents = payload["agents"]
     if any(existing.get("id") == agent.id for existing in agents):
@@ -1011,6 +1051,7 @@ async def create_agent(agent: AgentConfig):
 @app.put("/api/agents/{agent_id}")
 async def update_agent(agent_id: str, agent: AgentConfig):
     """Update a web-config agent preset."""
+    _validate_agent_attachment_profiles(agent)
     payload = _load_agents_payload()
     agents = payload["agents"]
     for index, existing in enumerate(agents):
@@ -1019,6 +1060,7 @@ async def update_agent(agent_id: str, agent: AgentConfig):
             if payload.get("active_agent_id") == agent_id:
                 payload["active_agent_id"] = agent.id
             _save_agents_payload(payload)
+            _invalidate_runtime_agent(agent_id)
             return {"status": "ok", "agent": agents[index]}
     raise HTTPException(status_code=404, detail=f"Agent not found: {agent_id}")
 
@@ -1035,6 +1077,7 @@ async def delete_agent(agent_id: str):
     if payload.get("active_agent_id") == agent_id:
         payload["active_agent_id"] = remaining[0].get("id") if remaining else None
     _save_agents_payload(payload)
+    _invalidate_runtime_agent(agent_id)
     return {"status": "ok"}
 
 
@@ -1995,20 +2038,10 @@ async def chat_with_agent(req: AgentChatRequest):
                 debug_log(f"Request overrides: profile={profile_override or '(default)'}, model={model_override or '(default)'}")
             debug_log(f"Original message: {message}")
 
-            def use_path_only_images_for_current_provider() -> bool:
-                try:
-                    from urllib.parse import urlsplit
-
-                    settings = _get_settings_obj().materialize_active_profile()
-                    api_format = str(settings.api_format or "").lower()
-                    host = (urlsplit(settings.base_url or "").hostname or "").lower()
-                    return api_format in {"openai", "openai_compat"} and host in {"localhost", "127.0.0.1", "::1"}
-                except Exception as exc:
-                    debug_log(f"Failed to inspect provider for image mode: {exc}")
-                    return False
-
-            path_only_images = use_path_only_images_for_current_provider()
-            debug_log(f"Image context mode: {'path-only' if path_only_images else 'inline-image'}")
+            # Attachments are intentionally lazy: the main model receives only
+            # local path markers and must call read_attachment when needed.
+            path_only_images = True
+            debug_log("Image context mode: path-only (Agent media model routing)")
             
             prompt_message = message
             continuation_keywords = ("继续", "继续执行", "继续生成", "默认", "按默认", "按照默认", "可以", "开始")
@@ -2176,13 +2209,50 @@ async def chat_with_agent(req: AgentChatRequest):
                         debug_log(f"Failed to save image: {e}")
             
             if file_attachments:
-                for att in file_attachments:
+                import mimetypes as mimetypes_lib
+                media_dir = web_output_dir / "inputs"
+                media_dir.mkdir(parents=True, exist_ok=True)
+                for index, att in enumerate(file_attachments, start=1):
                     att_type = att.get("type", "file")
-                    att_name = att.get("name", "unknown")
-                    if att_type == "voice":
-                        attachment_notes.append(f"[voice: {att_name}]")
-                    else:
-                        attachment_notes.append(f"[file: {att_name}]")
+                    att_name = att.get("name", f"attachment-{index}")
+                    encoded = str(att.get("data") or "")
+                    mime_type = str(att.get("mimeType") or "application/octet-stream")
+                    if encoded.startswith("data:"):
+                        header, _, encoded = encoded.partition(",")
+                        declared_mime = header[5:].split(";", 1)[0].strip()
+                        if declared_mime:
+                            mime_type = declared_mime
+                    extension = (
+                        mimetypes_lib.guess_extension(mime_type)
+                        or Path(att_name).suffix
+                        or ".bin"
+                    )
+                    safe_stem = (
+                        re.sub(r"[^\w\-.]", "_", Path(att_name).stem)
+                        or f"attachment-{index}"
+                    )
+                    target_path = media_dir / f"{safe_stem}{extension}"
+                    counter = 1
+                    while target_path.exists():
+                        target_path = media_dir / f"{safe_stem}_{counter}{extension}"
+                        counter += 1
+                    try:
+                        target_path.write_bytes(base64.b64decode(encoded))
+                        compact_path = compress_web_path(target_path.resolve())
+                        marker = (
+                            "audio"
+                            if mime_type.startswith("audio/") or att_type == "voice"
+                            else "file"
+                        )
+                        attachment_notes.append(f"[{marker}: {compact_path}]")
+                        debug_log(
+                            f"Attachment saved: {target_path.resolve()}, mime={mime_type}, "
+                            f"size={target_path.stat().st_size}"
+                        )
+                    except Exception as exc:
+                        traceback.print_exc()
+                        attachment_notes.append(f"[file: {att_name} - save failed: {exc}]")
+                        debug_log(f"Failed to save attachment {att_name}: {exc}")
             
             if attachment_notes:
                 if prompt_message:
@@ -2277,6 +2347,10 @@ async def chat_with_agent(req: AgentChatRequest):
             
             debug_log(f"Submitting user message to engine...")
             
+            from openharness.tools.read_attachment_tool import (
+                attachment_model_configs_from_agent,
+            )
+
             bundle = await build_runtime(
                 prompt="[Session initialized]",
                 cwd=str(Path.cwd()),
@@ -2289,6 +2363,7 @@ async def chat_with_agent(req: AgentChatRequest):
                 permission_prompt=lambda _tool, _reason: asyncio.sleep(0, result=True),
                 ask_user_prompt=lambda _question: asyncio.sleep(0, result=""),
                 edit_approval_prompt=lambda _path, _diff, _added, _removed: asyncio.sleep(0, result="accept"),
+                attachment_model_configs=attachment_model_configs_from_agent(agent),
             )
             debug_log("Runtime built successfully")
             bundle.session_id = session_id

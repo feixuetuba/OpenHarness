@@ -385,6 +385,7 @@ async def build_runtime(
     memory_backend: MemoryCommandBackend | None = None,
     include_project_memory: bool = True,
     autodream_context: dict[str, object] | None = None,
+    attachment_model_configs: dict[str, dict[str, str]] | None = None,
 ) -> RuntimeBundle:
     """Build the shared runtime for an OpenHarness session."""
     settings_overrides: dict[str, Any] = {
@@ -515,6 +516,7 @@ async def build_runtime(
             "edit_approval_prompt": edit_approval_prompt,
             "vision_model_config": _resolve_vision_config(settings),
             "image_generation_config": _resolve_image_generation_config(settings),
+            "attachment_model_configs": dict(attachment_model_configs or {}),
             **restored_metadata,
         },
     )

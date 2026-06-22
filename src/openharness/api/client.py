@@ -18,14 +18,19 @@ from openharness.api.errors import (
     RateLimitFailure,
     RequestFailure,
 )
+from openharness.api.usage import UsageSnapshot
 from openharness.auth.external import (
     claude_attribution_header,
     claude_oauth_betas,
     claude_oauth_headers,
     get_claude_code_session_id,
 )
-from openharness.api.usage import UsageSnapshot
-from openharness.engine.messages import ConversationMessage, assistant_message_from_api
+from openharness.engine.messages import (
+    AudioBlock,
+    ConversationMessage,
+    assistant_message_from_api,
+    serialize_content_block,
+)
 from openharness.utils.conversation_log import get_or_init_conversation_logger
 
 log = logging.getLogger(__name__)
@@ -36,6 +41,18 @@ BASE_DELAY = 1.0  # seconds
 MAX_DELAY = 30.0
 RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 529}
 OAUTH_BETA_HEADER = "oauth-2025-04-20"
+
+
+def _message_to_anthropic_param(message: ConversationMessage) -> dict[str, Any]:
+    """Serialize history while safely degrading audio unsupported by this transport."""
+    content: list[dict[str, Any]] = []
+    for block in message.content:
+        if isinstance(block, AudioBlock):
+            label = block.source_path or "inline audio"
+            content.append({"type": "text", "text": f"[Audio attachment omitted: {label}]"})
+        else:
+            content.append(serialize_content_block(block))
+    return {"role": message.role, "content": content}
 
 
 @dataclass(frozen=True)
@@ -208,7 +225,7 @@ class AnthropicApiClient:
         request_start_time = time.monotonic() if conv_logger else None
         params: dict[str, Any] = {
             "model": request.model,
-            "messages": [message.to_api_param() for message in request.messages],
+            "messages": [_message_to_anthropic_param(message) for message in request.messages],
             "max_tokens": request.max_tokens,
         }
         if request.system_prompt:

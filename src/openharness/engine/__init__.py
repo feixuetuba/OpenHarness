@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:  # pragma: no cover
     from openharness.engine.messages import (
+        AudioBlock,
         ConversationMessage,
         ImageBlock,
         TextBlock,
@@ -23,6 +24,7 @@ if TYPE_CHECKING:  # pragma: no cover
 __all__ = [
     "AssistantTextDelta",
     "AssistantTurnComplete",
+    "AudioBlock",
     "ConversationMessage",
     "ImageBlock",
     "QueryEngine",
@@ -35,8 +37,16 @@ __all__ = [
 
 
 def __getattr__(name: str):
-    if name in {"ConversationMessage", "ImageBlock", "TextBlock", "ToolResultBlock", "ToolUseBlock"}:
+    if name in {
+        "AudioBlock",
+        "ConversationMessage",
+        "ImageBlock",
+        "TextBlock",
+        "ToolResultBlock",
+        "ToolUseBlock",
+    }:
         from openharness.engine.messages import (
+            AudioBlock,
             ConversationMessage,
             ImageBlock,
             TextBlock,
@@ -45,6 +55,7 @@ def __getattr__(name: str):
         )
 
         return {
+            "AudioBlock": AudioBlock,
             "ConversationMessage": ConversationMessage,
             "ImageBlock": ImageBlock,
             "TextBlock": TextBlock,

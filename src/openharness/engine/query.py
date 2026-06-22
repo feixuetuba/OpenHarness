@@ -52,6 +52,36 @@ MAX_SAFE_COMPLETION_TOKENS = 128_000
 
 log = logging.getLogger(__name__)
 DEFAULT_TOOL_TIMEOUT_SECONDS = 600.0
+ATTACHMENT_TOOL_NAME = "read_attachment"
+
+
+def _tool_schemas_for_model(context: "QueryContext") -> list[dict[str, Any]]:
+    """Expose attachment loading only for media models configured on this agent."""
+    schemas = context.tool_registry.to_api_schema()
+    configs = (
+        context.tool_metadata.get("attachment_model_configs", {})
+        if isinstance(context.tool_metadata, dict)
+        else {}
+    )
+    modalities = {
+        kind
+        for kind in ("image", "audio")
+        if isinstance(configs, dict)
+        and isinstance(configs.get(kind), dict)
+        and str(configs[kind].get("profile") or "").strip()
+    }
+    if not modalities:
+        return [schema for schema in schemas if schema.get("name") != ATTACHMENT_TOOL_NAME]
+
+    labels = ", ".join(sorted(modalities))
+    for schema in schemas:
+        if schema.get("name") == ATTACHMENT_TOOL_NAME:
+            schema["description"] = (
+                f"{schema.get('description', '')}\n\n"
+                "This Agent has dedicated processing configured for these attachment "
+                f"types: {labels}."
+            )
+    return schemas
 
 
 PermissionPrompt = Callable[..., Awaitable[bool]]
@@ -812,7 +842,7 @@ async def run_query(
                     messages=messages,
                     system_prompt=context.system_prompt,
                     max_tokens=effective_max_tokens,
-                    tools=context.tool_registry.to_api_schema(),
+                    tools=_tool_schemas_for_model(context),
                     effort=context.effort,
                 )
             ):

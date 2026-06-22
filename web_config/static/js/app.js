@@ -472,6 +472,7 @@ function renderAgents() {
         <span class="text-sm font-medium ${a.id === activeAgentId ? 'text-accent-green' : 'text-text-primary'}">${a.name}</span>
         <span class="text-xs text-text-muted ml-2">(${a.id})</span>
         <div class="text-xs text-text-muted mt-1">${a.profile ? `供应商: ${a.profile}` : '供应商: 当前默认'}${a.model ? ` · 模型: ${a.model}` : ''}</div>
+        <div class="text-xs text-text-muted mt-1">${a.image_profile ? `图片: ${a.image_profile}/${a.image_model || '默认模型'}` : '图片: 未配置'} · ${a.audio_profile ? `音频: ${a.audio_profile}/${a.audio_model || '默认模型'}` : '音频: 未配置'}</div>
       </div>
       ${a.id === activeAgentId ? '<span class="text-xs text-accent-green font-medium flex items-center gap-1"><span class="w-1.5 h-1.5 rounded-full bg-accent-green"></span>当前</span>' : ''}
       <div class="flex flex-wrap gap-2 items-center ml-auto">
@@ -536,6 +537,91 @@ function syncAgentModelFromSelect() {
   document.getElementById('newAgentModel').value = document.getElementById('newAgentModelSelect').value || '';
 }
 
+function attachmentFieldId(kind, suffix) {
+  const title = kind.charAt(0).toUpperCase() + kind.slice(1);
+  return `newAgent${title}${suffix}`;
+}
+
+function attachmentProfileAllowed(kind, profile) {
+  if (kind !== 'audio') return true;
+  return profile.provider !== 'openai_codex' && ['openai', 'openai_compat', 'copilot'].includes(profile.api_format);
+}
+
+function renderAttachmentProfileOptions(kind, selected = '') {
+  const select = document.getElementById(attachmentFieldId(kind, 'Profile'));
+  if (!select) return;
+  const current = selected || select.value || '';
+  const profiles = profileList.filter(profile => attachmentProfileAllowed(kind, profile));
+  select.innerHTML = `<option value="">不支持${kind === 'image' ? '图片' : '音频'}处理</option>` + profiles.map(profile => `
+    <option value="${profile.name}">${profile.name}${profile.label ? ` · ${profile.label}` : ''}${profile.configured ? '' : '（未配置 Key）'}</option>
+  `).join('');
+  select.value = profiles.some(profile => profile.name === current) ? current : '';
+  updateAttachmentModelChoices(kind);
+}
+
+async function updateAttachmentModelChoices(kind, selected = '') {
+  const profileName = document.getElementById(attachmentFieldId(kind, 'Profile'))?.value || '';
+  const profile = profileName ? profileMap[profileName] : null;
+  const modelInput = document.getElementById(attachmentFieldId(kind, 'Model'));
+  const modelSelect = document.getElementById(attachmentFieldId(kind, 'ModelSelect'));
+  const models = [];
+  if (profile) {
+    if (Array.isArray(profile.allowed_models)) models.push(...profile.allowed_models);
+    if (profile.last_model) models.push(profile.last_model);
+    if (profile.default_model) models.push(profile.default_model);
+  }
+  const unique = [...new Set(models.filter(Boolean))];
+  const chosen = selected || modelInput?.value || '';
+  if (modelSelect) {
+    modelSelect.innerHTML = '<option value="">使用所选供应商默认模型</option>' + unique.map(model => `<option value="${model}">${model}</option>`).join('');
+    if (chosen && !unique.includes(chosen)) modelSelect.innerHTML += `<option value="${chosen}">${chosen}</option>`;
+    modelSelect.value = chosen;
+  }
+  const hint = document.getElementById(`agent${kind.charAt(0).toUpperCase() + kind.slice(1)}ModelHint`);
+  if (hint) hint.textContent = profile
+    ? `处理请求将发送至 ${profile.name}/${chosen || profile.default_model || '默认模型'}`
+    : `未配置时，Agent 不支持${kind === 'image' ? '图片' : '音频'}处理。`;
+}
+
+function syncAttachmentModelFromSelect(kind) {
+  const select = document.getElementById(attachmentFieldId(kind, 'ModelSelect'));
+  const input = document.getElementById(attachmentFieldId(kind, 'Model'));
+  if (input) input.value = select?.value || '';
+  updateAttachmentModelChoices(kind, input?.value || '');
+}
+
+async function refreshAttachmentModelList(kind, options = {}) {
+  const profileName = document.getElementById(attachmentFieldId(kind, 'Profile'))?.value || '';
+  const profile = profileName ? profileMap[profileName] : null;
+  if (!profile) {
+    if (!options.silent) alert('请先选择一个供应商/Profile');
+    return;
+  }
+  const selected = options.selected || document.getElementById(attachmentFieldId(kind, 'Model'))?.value || '';
+  const hint = document.getElementById(`agent${kind.charAt(0).toUpperCase() + kind.slice(1)}ModelHint`);
+  if (hint) hint.textContent = '正在获取模型列表...';
+  try {
+    const res = await fetch('/api/test-connection', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        base_url: profile.base_url,
+        api_format: profile.api_format || 'openai',
+        profile_name: profile.name
+      })
+    });
+    const data = await res.json();
+    if (!data.success) {
+      if (hint) hint.textContent = `获取失败: ${data.message || '未知错误'}`;
+      return;
+    }
+    profile.allowed_models = [...new Set([...(profile.allowed_models || []), ...(data.models || [])])];
+    await updateAttachmentModelChoices(kind, selected);
+  } catch (error) {
+    if (hint) hint.textContent = `获取失败: ${error.message}`;
+  }
+}
+
 async function refreshAgentModelList(options = {}) {
   const silent = Boolean(options.silent);
   const selected = options.selected || document.getElementById('newAgentModel').value.trim();
@@ -586,6 +672,10 @@ function showAddAgentForm() {
   document.getElementById('newAgentModel').value = '';
   updateAgentModelChoices('');
   document.getElementById('newAgentMaxTurns').value = '';
+  for (const kind of ['image', 'audio']) {
+    document.getElementById(attachmentFieldId(kind, 'Model')).value = '';
+    renderAttachmentProfileOptions(kind, '');
+  }
   document.getElementById('newAgentId').disabled = false;
   document.getElementById('addAgentForm').classList.remove('hidden');
 }
@@ -609,6 +699,13 @@ function editAgent(id) {
   document.getElementById('newAgentModel').value = agent.model || '';
   updateAgentModelChoices(agent.model || '');
   document.getElementById('newAgentMaxTurns').value = agent.max_turns || '';
+  for (const kind of ['image', 'audio']) {
+    const profile = agent[`${kind}_profile`] || '';
+    const model = agent[`${kind}_model`] || '';
+    document.getElementById(attachmentFieldId(kind, 'Model')).value = model;
+    renderAttachmentProfileOptions(kind, profile);
+    updateAttachmentModelChoices(kind, model);
+  }
   document.getElementById('addAgentForm').classList.remove('hidden');
 }
 
@@ -619,6 +716,10 @@ async function saveAgent() {
   const profile = document.getElementById('newAgentProfile').value || null;
   const model = document.getElementById('newAgentModel').value.trim() || null;
   const maxTurns = document.getElementById('newAgentMaxTurns').value ? parseInt(document.getElementById('newAgentMaxTurns').value) : null;
+  const imageProfile = document.getElementById('newAgentImageProfile').value || null;
+  const imageModel = document.getElementById('newAgentImageModel').value.trim() || null;
+  const audioProfile = document.getElementById('newAgentAudioProfile').value || null;
+  const audioModel = document.getElementById('newAgentAudioModel').value.trim() || null;
 
   if (!id || !name) {
     alert('Agent ID 和显示名称为必填项');
@@ -632,6 +733,10 @@ async function saveAgent() {
     profile,
     model,
     max_turns: maxTurns,
+    image_profile: imageProfile,
+    image_model: imageProfile ? imageModel : null,
+    audio_profile: audioProfile,
+    audio_model: audioProfile ? audioModel : null,
   };
 
   try {

@@ -28,6 +28,7 @@ from openharness.api.errors import (
 )
 from openharness.api.usage import UsageSnapshot
 from openharness.engine.messages import (
+    AudioBlock,
     ConversationMessage,
     ContentBlock,
     ImageBlock,
@@ -103,7 +104,9 @@ def _convert_messages_to_openai(
         elif msg.role == "user":
             # User messages may contain text or tool_result blocks
             tool_results = [b for b in msg.content if isinstance(b, ToolResultBlock)]
-            user_blocks = [b for b in msg.content if isinstance(b, (TextBlock, ImageBlock))]
+            user_blocks = [
+                b for b in msg.content if isinstance(b, (TextBlock, ImageBlock, AudioBlock))
+            ]
 
             if tool_results:
                 # Each tool result becomes a separate message with role="tool"
@@ -128,9 +131,9 @@ def _convert_messages_to_openai(
 
 
 def _convert_user_content_to_openai(blocks: list[ContentBlock]) -> str | list[dict[str, Any]]:
-    """Convert user text/image blocks into OpenAI chat content."""
-    has_image = any(isinstance(block, ImageBlock) for block in blocks)
-    if not has_image:
+    """Convert user text and native media blocks into OpenAI chat content."""
+    has_media = any(isinstance(block, (ImageBlock, AudioBlock)) for block in blocks)
+    if not has_media:
         return "".join(block.text for block in blocks if isinstance(block, TextBlock))
 
     content: list[dict[str, Any]] = []
@@ -143,6 +146,22 @@ def _convert_user_content_to_openai(blocks: list[ContentBlock]) -> str | list[di
                 "image_url": {
                     "url": f"data:{block.media_type};base64,{block.data}",
                 },
+            })
+        elif isinstance(block, AudioBlock):
+            audio_format = {
+                "audio/mpeg": "mp3",
+                "audio/mp3": "mp3",
+                "audio/wav": "wav",
+                "audio/x-wav": "wav",
+                "audio/ogg": "ogg",
+                "audio/flac": "flac",
+                "audio/mp4": "m4a",
+                "audio/x-m4a": "m4a",
+                "audio/mp4a-latm": "m4a",
+            }.get(block.media_type.lower(), block.media_type.rsplit("/", 1)[-1])
+            content.append({
+                "type": "input_audio",
+                "input_audio": {"data": block.data, "format": audio_format},
             })
     return content
 
