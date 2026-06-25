@@ -1385,6 +1385,20 @@ async def get_social_platforms():
 @app.put("/api/social-platforms")
 async def update_social_platforms(data: dict):
     """Update social platform settings."""
+    if "social_context_max_messages" in data:
+        try:
+            context_max_messages = int(data["social_context_max_messages"])
+        except (TypeError, ValueError):
+            raise HTTPException(
+                status_code=400,
+                detail="social_context_max_messages must be a non-negative integer",
+            )
+        if context_max_messages < 0:
+            raise HTTPException(
+                status_code=400,
+                detail="social_context_max_messages must be a non-negative integer",
+            )
+        data = {**data, "social_context_max_messages": context_max_messages}
     _update_settings_section("social_platforms", data)
     _sync_social_platforms_to_channels(data)
     runtime = getattr(app.state, "channel_runtime", None)

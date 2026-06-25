@@ -98,7 +98,9 @@ class WebConfigSmartChannelBridge:
         self._get_channel_sessions = get_channel_sessions
         self._resolve_agent_name = resolve_agent_name
         self._set_agent_assignment = set_agent_assignment
-        self._agent_engines: dict[str, "QueryEngine"] = {}
+        # Conversation engines must never be shared across social sessions.
+        # Otherwise retaining history could expose one user's context to another.
+        self._session_engines: dict[str, "QueryEngine"] = {}
         self._states: dict[str, dict[str, Any]] = {}
         self._messages_by_id: dict[str, dict[str, Any]] = {}
         self._loaded_message_index_channels: set[str] = set()
@@ -128,11 +130,66 @@ class WebConfigSmartChannelBridge:
             task.cancel()
         if self._active_tasks:
             await asyncio.gather(*self._active_tasks, return_exceptions=True)
+        self._session_engines.clear()
         logger.info("WebConfigSmartChannelBridge stopped")
 
     def invalidate_agent(self, agent_id: str) -> None:
         """Drop a cached Agent engine so edited provider settings apply next turn."""
-        self._agent_engines.pop(agent_id, None)
+        suffix = f"\x00{agent_id}"
+        for key in [key for key in self._session_engines if key.endswith(suffix)]:
+            self._session_engines.pop(key, None)
+
+    async def _engine_for_message(
+        self,
+        msg: InboundMessage,
+        agent_id: str | None,
+    ) -> "QueryEngine":
+        """Return an engine isolated to one social conversation."""
+        if self._create_engine_for_agent is None:
+            return self._engine
+
+        engine_key = f"{self._state_key(msg)}\x00{agent_id or ''}"
+        engine = self._session_engines.get(engine_key)
+        if engine is not None:
+            return engine
+        try:
+            engine = await self._create_engine_for_agent(agent_id or "")
+            engine.tool_metadata["session_id"] = self._conversation_session_id(msg)
+            self._session_engines[engine_key] = engine
+            return engine
+        except Exception:
+            traceback.print_exc()
+            logger.error(
+                "Failed to create isolated engine for agent %s, falling back to shared default",
+                agent_id or "(default)",
+            )
+            return self._engine
+
+    @staticmethod
+    def _context_clear_reason(
+        *,
+        retain_context: bool,
+        max_messages: int,
+        message_count: int,
+    ) -> str | None:
+        if not retain_context:
+            return "context_retention_disabled"
+        if max_messages > 0 and message_count >= max_messages:
+            return "context_message_limit_reached"
+        return None
+
+    @staticmethod
+    def _social_context_policy() -> tuple[bool, int]:
+        try:
+            from openharness.config.settings import load_settings
+
+            social = load_settings().social_platforms
+            retain_context = bool(getattr(social, "social_retain_context", False))
+            max_messages = max(0, int(getattr(social, "social_context_max_messages", 0) or 0))
+            return retain_context, max_messages
+        except Exception:
+            traceback.print_exc()
+            return False, 0
 
     async def _loop(self) -> None:
         while self._running:
@@ -293,6 +350,9 @@ class WebConfigSmartChannelBridge:
             "active_media": [],
             "expecting_file": {"active": False, "description": ""},
             "last_output_snapshot": set(),
+            "context_message_count": 0,
+            "context_agent_id": None,
+            "process_lock": asyncio.Lock(),
         }
 
     async def _clear_state_and_process(self, state: dict[str, Any], msg: InboundMessage, prompt: str) -> None:
@@ -302,6 +362,21 @@ class WebConfigSmartChannelBridge:
         await self._process_now(msg, prompt, state=state)
 
     async def _process_now(self, msg: InboundMessage, content: str, *, state: dict[str, Any] | None = None) -> None:
+        state = state or self._states.setdefault(self._state_key(msg), self._new_state())
+        process_lock = state.get("process_lock")
+        if not isinstance(process_lock, asyncio.Lock):
+            process_lock = asyncio.Lock()
+            state["process_lock"] = process_lock
+        async with process_lock:
+            await self._process_now_unlocked(msg, content, state=state)
+
+    async def _process_now_unlocked(
+        self,
+        msg: InboundMessage,
+        content: str,
+        *,
+        state: dict[str, Any],
+    ) -> None:
         logger.info(
             "WebConfigSmartChannelBridge processing %s/%s, content=%s",
             msg.channel,
@@ -317,17 +392,8 @@ class WebConfigSmartChannelBridge:
                 await self._publish_reply(msg, command_result)
                 return
 
-        engine = self._engine
         agent_id = self._resolve_agent_id(msg.channel) if self._resolve_agent_id else None
-        if agent_id and self._create_engine_for_agent is not None:
-            if agent_id not in self._agent_engines:
-                try:
-                    self._agent_engines[agent_id] = await self._create_engine_for_agent(agent_id)
-                except Exception:
-                    logger.exception("Failed to create engine for agent %s, falling back to default", agent_id)
-                    agent_id = None
-            if agent_id in self._agent_engines:
-                engine = self._agent_engines[agent_id]
+        engine = await self._engine_for_message(msg, agent_id)
 
         reply_parts: list[str] = []
         output_dir = self._ensure_social_output_dir(msg)
@@ -359,12 +425,37 @@ class WebConfigSmartChannelBridge:
                 self._social_debug("continue_pending_start", msg, output_dir=str(output_dir))
                 stream = engine.continue_pending().__aiter__()
             else:
-                # Chat channels keep media continuity in the bridge state. Keep
-                # model history short so local 8k-context providers do not carry
-                # old tool results into unrelated social messages.
-                engine.clear()
-                self._social_debug("engine_history_cleared", msg, reason="fresh_social_message")
+                retain_context, max_messages = self._social_context_policy()
+                context_agent_id = agent_id or ""
+                if state.get("context_agent_id") != context_agent_id:
+                    state["context_agent_id"] = context_agent_id
+                    state["context_message_count"] = 0
+                context_message_count = int(state.get("context_message_count") or 0)
+                clear_reason = self._context_clear_reason(
+                    retain_context=retain_context,
+                    max_messages=max_messages,
+                    message_count=context_message_count,
+                )
+                if engine is self._engine and retain_context:
+                    clear_reason = "shared_default_engine_fallback"
+                if clear_reason:
+                    engine.clear()
+                    context_message_count = 0
+                    self._social_debug(
+                        "engine_history_cleared",
+                        msg,
+                        reason=clear_reason,
+                        max_messages=max_messages,
+                    )
+                else:
+                    self._social_debug(
+                        "engine_history_retained",
+                        msg,
+                        retained_messages=context_message_count,
+                        max_messages=max_messages,
+                    )
                 stream = engine.submit_message(full_prompt).__aiter__()
+                state["context_message_count"] = context_message_count + 1
             auto_continued_after_empty = False
             async_drain_count = 0
             while True:

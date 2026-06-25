@@ -599,6 +599,8 @@ class SocialPlatformConfig(BaseModel):
     social_file_base_url: str = ""
     social_file_token: str = ""
     social_auto_approve_tools: bool = False
+    social_retain_context: bool = False
+    social_context_max_messages: int = Field(default=0, ge=0)
     wechat_enabled: bool = False
     wechat_api_url: str = ""
     wechat_app_id: str = ""

@@ -1396,6 +1396,24 @@ async function loadSocialSettings() {
         </div>
       </div>
 
+      <div class="form-section">
+        <div class="form-item">
+          <label class="form-label">对话上下文</label>
+          <select id="socialRetainContext" class="form-input">
+            <option value="false" ${!data.social_retain_context ? 'selected' : ''}>不保留（每条消息清空）</option>
+            <option value="true" ${data.social_retain_context ? 'selected' : ''}>保留同一会话的上下文</option>
+          </select>
+          <p class="text-xs text-text-muted mt-1">上下文按平台和会话隔离，不会在不同用户之间共享。</p>
+        </div>
+      </div>
+
+      <div class="form-section">
+        <div class="form-item">
+          <label class="form-label">自动清空间隔 <span class="text-text-muted text-xs">（用户消息数，0 表示不自动清空）</span></label>
+          <input type="number" min="0" step="1" id="socialContextMaxMessages" class="form-input" value="${Math.max(0, Number(data.social_context_max_messages) || 0)}">
+        </div>
+      </div>
+
       <div id="socialTabContentWechat" class="social-tab-content" style="display: block;">
         <div class="form-section">
           <div class="form-item">
@@ -2144,6 +2162,34 @@ async function loadSocialSettings() {
         </button>
       </div>
 
+      <div class="form-section">
+        <div class="form-item">
+          <label class="form-label">工具授权策略</label>
+          <select id="socialAutoApproveTools" class="form-input">
+            <option value="false" ${!data.social_auto_approve_tools ? 'selected' : ''}>询问用户后执行</option>
+            <option value="true" ${data.social_auto_approve_tools ? 'selected' : ''}>自动允许工具调用</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="form-section">
+        <div class="form-item">
+          <label class="form-label">对话上下文</label>
+          <select id="socialRetainContext" class="form-input">
+            <option value="false" ${!data.social_retain_context ? 'selected' : ''}>不保留（每条消息清空）</option>
+            <option value="true" ${data.social_retain_context ? 'selected' : ''}>保留同一会话的上下文</option>
+          </select>
+          <p class="text-xs text-text-muted mt-1">上下文按平台和会话隔离，不会在不同用户之间共享。</p>
+        </div>
+      </div>
+
+      <div class="form-section">
+        <div class="form-item">
+          <label class="form-label">自动清空间隔 <span class="text-text-muted text-xs">（用户消息数，0 表示不自动清空）</span></label>
+          <input type="number" min="0" step="1" id="socialContextMaxMessages" class="form-input" value="${Math.max(0, Number(data.social_context_max_messages) || 0)}">
+        </div>
+      </div>
+
       <div id="socialTabContentWechat" class="social-tab-content" style="display: block;">
         <div class="form-section">
           <div class="form-item">
@@ -2312,8 +2358,11 @@ function switchSocialTab(tab) {
 }
 
 async function saveSocialSettings() {
+  const contextMaxMessages = Number.parseInt(document.getElementById('socialContextMaxMessages').value, 10);
   const data = {
     social_auto_approve_tools: document.getElementById('socialAutoApproveTools').value === 'true',
+    social_retain_context: document.getElementById('socialRetainContext').value === 'true',
+    social_context_max_messages: Number.isFinite(contextMaxMessages) ? Math.max(0, contextMaxMessages) : 0,
     wechat_enabled: document.getElementById('socialWechatEnabled').value === 'true',
     wechat_api_url: document.getElementById('socialWechatApiUrl').value,
     wechat_app_id: document.getElementById('socialWechatAppId').value,
